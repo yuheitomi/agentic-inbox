@@ -5,7 +5,7 @@
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
-import { createRequestHandler } from "react-router";
+import { createContext, createRequestHandler, RouterContextProvider } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
 import { EmailMCP } from "./mcp";
 import type { Env } from "./types";
@@ -14,14 +14,17 @@ export { MailboxDO } from "./durableObject";
 export { EmailAgent } from "./agent";
 export { EmailMCP } from "./mcp";
 
-declare module "react-router" {
-  export interface AppLoadContext {
-    cloudflare: {
-      env: Env;
-      ctx: ExecutionContext;
-    };
-  }
-}
+/**
+ * Router context holding the Worker's environment bindings.
+ *
+ * React Router v8 makes middleware the default, so loaders, actions and
+ * middleware read the load context through `context.get()` rather than from a
+ * plain object.
+ */
+export const cloudflareContext = createContext<{
+  env: Env;
+  ctx: ExecutionContext;
+}>();
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
@@ -100,9 +103,12 @@ app.all("/agents/*", async (c) => {
 
 // React Router catch-all: serves the SPA for all non-API routes
 app.all("*", (c) => {
-  return requestHandler(c.req.raw, {
-    cloudflare: { env: c.env, ctx: c.executionCtx as ExecutionContext },
+  const context = new RouterContextProvider();
+  context.set(cloudflareContext, {
+    env: c.env,
+    ctx: c.executionCtx as ExecutionContext,
   });
+  return requestHandler(c.req.raw, context);
 });
 
 // Export the Hono app as the default export with an email handler

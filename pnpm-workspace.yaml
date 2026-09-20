@@ -37,3 +37,5 @@ allowBuilds:
   core-js-pure: false
   esbuild: true
   workerd: true
+minimumReleaseAgeExclude:
+  - "@cloudflare/workers-types@5.20260920.1"

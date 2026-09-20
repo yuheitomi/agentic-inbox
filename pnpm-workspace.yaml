@@ -1,5 +1,4 @@
 overrides:
-  "@cloudflare/kumo>zod": "catalog:"
   "@tiptap/core": 3.31.3
   "@tiptap/pm": 3.31.3
   "@tiptap/extensions": 3.31.3
@@ -26,7 +25,7 @@ overrides:
   "@tiptap/extension-text": 3.31.3
   vite@*: "catalog:"
 catalog:
-  zod: ^3.25.76
+  zod: ^4.6.5
   vite: npm:@voidzero-dev/vite-plus-core@0.3.3
   vite-plus: 0.3.3
 peerDependencyRules:

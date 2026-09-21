@@ -55,6 +55,25 @@ export const ErrorResponseSchema = z.object({
   error: z.string(),
 });
 
+/**
+ * Mailbox settings. Mirrors `MailboxSettings` in `app/types`; unknown keys are
+ * stripped rather than passed through, so the RPC client's request type stays
+ * a closed object it can actually check.
+ *
+ * `agentSystemPrompt` is deliberately free text -- it goes straight to the AI.
+ */
+export const MailboxSettingsSchema = z.object({
+  fromName: z.string().optional(),
+  forwarding: z.object({ enabled: z.boolean(), email: z.string() }).optional(),
+  signature: z
+    .object({ enabled: z.boolean(), text: z.string(), html: z.string().optional() })
+    .optional(),
+  autoReply: z
+    .object({ enabled: z.boolean(), subject: z.string(), message: z.string() })
+    .optional(),
+  agentSystemPrompt: z.string().optional(),
+});
+
 export const SendEmailRequestSchema = z
   .object({
     to: RecipientFieldSchema,
@@ -82,6 +101,8 @@ export const SendEmailRequestSchema = z
   .refine((data) => data.html || data.text, {
     error: "Either 'html' or 'text' must be provided",
   });
+
+export type SendEmailRequest = z.infer<typeof SendEmailRequestSchema>;
 
 export const SendEmailResponseSchema = z.object({
   id: z.string(),

@@ -2,7 +2,6 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import type { Context } from "hono";
 import { Folders } from "../../shared/folders";
 import { sendEmail } from "../email-sender";
 import { storeAttachments } from "../lib/attachments";
@@ -14,18 +13,20 @@ import {
   buildThreadingHeaders,
   resolveOriginalEmail,
 } from "../lib/email-helpers";
-import type { MailboxContext } from "../lib/mailbox";
-import type { EmailFull } from "../lib/schemas";
-import { SendEmailRequestSchema } from "../lib/schemas";
+import { rawOps } from "../lib/mailbox";
+import type { EmailFull, SendEmailRequest } from "../lib/schemas";
+import type { JsonContext } from "../lib/validate";
 
-type AppContext = Context<MailboxContext>;
-type RateLimitStub = { checkSendRateLimit: () => Promise<string | null> };
+/**
+ * Both handlers are mounted with `zJson(SendEmailRequestSchema)`, so the body
+ * arrives already parsed on `c.req.valid("json")`.
+ */
+type AppContext = JsonContext<SendEmailRequest>;
 
 export async function handleReplyEmail(c: AppContext) {
   const mailboxId = c.req.param("mailboxId") ?? "";
   const id = c.req.param("id") ?? "";
-  const body = SendEmailRequestSchema.parse(await c.req.json());
-  const { to, cc, bcc, from, subject, html, text, attachments } = body;
+  const { to, cc, bcc, from, subject, html, text, attachments } = c.req.valid("json");
 
   const stub = c.var.mailboxStub;
   const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
@@ -47,7 +48,7 @@ export async function handleReplyEmail(c: AppContext) {
 
   const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
-  const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
+  const rateLimitError = await rawOps(stub).checkSendRateLimit();
   if (rateLimitError) {
     return c.json({ error: rateLimitError }, 429);
   }
@@ -116,8 +117,7 @@ export async function handleReplyEmail(c: AppContext) {
 export async function handleForwardEmail(c: AppContext) {
   const mailboxId = c.req.param("mailboxId") ?? "";
   const id = c.req.param("id") ?? "";
-  const body = SendEmailRequestSchema.parse(await c.req.json());
-  const { to, cc, bcc, from, subject, html, text, attachments } = body;
+  const { to, cc, bcc, from, subject, html, text, attachments } = c.req.valid("json");
 
   const stub = c.var.mailboxStub;
   const rawOriginal = (await stub.getEmail(id)) as EmailFull | null;
@@ -138,7 +138,7 @@ export async function handleForwardEmail(c: AppContext) {
 
   const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
-  const rateLimitError = await (stub as unknown as RateLimitStub).checkSendRateLimit();
+  const rateLimitError = await rawOps(stub).checkSendRateLimit();
   if (rateLimitError) {
     return c.json({ error: rateLimitError }, 429);
   }

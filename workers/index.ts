@@ -445,7 +445,7 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
     const { done, value } = await reader.read();
     if (done) break;
     if (bytesRead + value.length > streamSize) {
-      reader.cancel();
+      void reader.cancel();
       throw new Error(`Stream exceeds declared size`);
     }
     result.set(value, bytesRead);

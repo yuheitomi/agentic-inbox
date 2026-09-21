@@ -67,13 +67,13 @@ export default function HomeRoute() {
     }
     autoCreateDone.current = true;
     let cancelled = false;
-    Promise.all(
+    void Promise.all(
       toCreate.map((addr) => {
         const localPart = addr.split("@")[0] || addr;
         return api.createMailbox(addr, localPart).catch(() => {});
       }),
     ).then(() => {
-      if (!cancelled) refetchMailboxes();
+      if (!cancelled) void refetchMailboxes();
     });
     return () => {
       cancelled = true;

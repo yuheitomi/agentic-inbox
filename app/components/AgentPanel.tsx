@@ -272,7 +272,7 @@ function AgentChatConnected({
     const text = inputValue.trim();
     if (!text || isStreaming) return;
     setInputValue("");
-    sendMessage({ text });
+    void sendMessage({ text });
     if (inputRef.current) inputRef.current.style.height = "auto";
   };
 
@@ -380,7 +380,7 @@ function AgentChatConnected({
                         draftEmail,
                       });
                     } else {
-                      sendMessage({
+                      void sendMessage({
                         text: "Let me edit this draft first. Show me what you have so I can modify it.",
                       });
                     }

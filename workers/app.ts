@@ -3,16 +3,16 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { routeAgentRequest } from "agents";
+import { createMcpHandler, type StatelessMcpHandler } from "agents/mcp/server";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createContext, createRequestHandler, RouterContextProvider } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
-import { EmailMCP } from "./mcp";
+import { createEmailMcpServer } from "./mcp";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
 export { EmailAgent } from "./agent";
-export { EmailMCP } from "./mcp";
 
 /**
  * Router context holding the Worker's environment bindings.
@@ -82,13 +82,16 @@ app.use("*", async (c, next) => {
 });
 
 // MCP server endpoint — used by AI coding tools (ProtoAgent, Claude Code, Cursor, etc.)
-// Must be before API routes and React Router catch-all
-const mcpHandler = EmailMCP.serve("/mcp", { binding: "EMAIL_MCP" });
+// Must be before API routes and React Router catch-all.
+// The handler is stateless (no Durable Object); it builds one MCP server per
+// request. `env` is only available per request, so the handler is memoized for
+// the lifetime of the isolate, which shares a single `env`.
+let mcpHandler: StatelessMcpHandler | undefined;
 app.all("/mcp", async (c) => {
-  return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
-});
-app.all("/mcp/*", async (c) => {
-  return mcpHandler.fetch(c.req.raw, c.env, c.executionCtx as ExecutionContext);
+  mcpHandler ??= createMcpHandler(() => createEmailMcpServer(c.env), {
+    route: "/mcp",
+  });
+  return mcpHandler(c.req.raw, c.env, c.executionCtx as ExecutionContext);
 });
 
 // Mount the API routes

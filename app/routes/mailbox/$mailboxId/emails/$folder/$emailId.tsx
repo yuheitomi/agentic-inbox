@@ -3,23 +3,33 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { useEffect, useRef } from "react";
-import { data, useFetcher, useNavigate, useRouteLoaderData, useSearchParams } from "react-router";
+import { useFetcher, useNavigate, useRouteLoaderData, useSearchParams } from "react-router";
 import EmailPanel from "~/components/EmailPanel";
-import { requireMailboxStub, threadOps } from "~/lib/mailbox.server";
 import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
-import type { Email } from "~/types";
+import { ok, serverApi } from "~/services/api.server";
 import type { Route } from "./+types/$emailId";
 
-export async function loader({ params, context }: Route.LoaderArgs) {
+export async function loader({ params, request, context }: Route.LoaderArgs) {
   const mailboxId = decodeURIComponent(params.mailboxId);
-  const stub = await requireMailboxStub(context, mailboxId);
+  const api = serverApi(context, request);
 
-  const email = (await stub.getEmail(params.emailId)) as Email | null;
-  if (!email) throw data({ error: "Email not found" }, { status: 404 });
+  // A missing email answers 404, which `ok` rethrows as the error boundary's
+  // response.
+  const email = await ok(
+    api.mailboxes[":mailboxId"].emails[":id"].$get({
+      param: { mailboxId, id: params.emailId },
+    }),
+  );
 
-  // One DO call returns every message in the thread with bodies and
+  // One request returns every message in the thread with bodies and
   // attachments. Replaces the client's getEmail-per-message waterfall.
-  const thread = email.thread_id ? await threadOps(stub).getThreadEmails(email.thread_id) : [];
+  const thread = email.thread_id
+    ? await ok(
+        api.mailboxes[":mailboxId"].threads[":threadId"].$get({
+          param: { mailboxId, threadId: email.thread_id },
+        }),
+      )
+    : [];
 
   return { email, thread };
 }

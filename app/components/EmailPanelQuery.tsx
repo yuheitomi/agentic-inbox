@@ -18,14 +18,13 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { useEmail, useThreadReplies } from "~/queries/emails";
 import { useFolders } from "~/queries/folders";
 import { useMailbox } from "~/queries/mailboxes";
-import type { Email, Folder, Mailbox } from "~/types";
 
 export default function EmailPanelQuery({ emailId }: { emailId: string }) {
   const { mailboxId } = useParams<{ mailboxId: string }>();
-  const { data: email } = useEmail(mailboxId, emailId) as { data?: Email };
-  const { data: thread } = useThreadReplies(mailboxId, email?.thread_id) as { data?: Email[] };
-  const { data: folders = [] } = useFolders(mailboxId) as { data?: Folder[] };
-  const { data: mailbox } = useMailbox(mailboxId) as { data?: Mailbox };
+  const { data: email } = useEmail(mailboxId, emailId);
+  const { data: thread } = useThreadReplies(mailboxId, email?.thread_id);
+  const { data: folders = [] } = useFolders(mailboxId);
+  const { data: mailbox } = useMailbox(mailboxId);
   const closePanel = useUIStore((s) => s.closePanel);
 
   if (!email) return <EmailPanelSkeleton />;

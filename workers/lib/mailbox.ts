@@ -8,15 +8,63 @@
  * and attaches it to the Hono context (`c.var.mailboxStub`).
  */
 import { createMiddleware } from "hono/factory";
+import type { Email } from "~/types";
 import type { MailboxDO } from "../durableObject";
 import type { Env } from "../types";
+
+export type MailboxStub = DurableObjectStub<MailboxDO>;
 
 export type MailboxContext = {
   Bindings: Env;
   Variables: {
-    mailboxStub: DurableObjectStub<MailboxDO>;
+    mailboxStub: MailboxStub;
   };
 };
+
+export interface SearchFilters {
+  query: string;
+  folder?: string;
+  from?: string;
+  to?: string;
+  subject?: string;
+  date_start?: string;
+  date_end?: string;
+  is_read?: boolean;
+  is_starred?: boolean;
+  has_attachment?: boolean;
+}
+
+/**
+ * Durable Object methods the RPC stub type cannot express -- they read off raw
+ * `sql.exec` rows. Declared separately and reached through `rawOps()` rather
+ * than intersected into `MailboxStub`, which would make the stub's mapped type
+ * too deep for the compiler. Mirrors `threadOps` in `app/lib/mailbox.server.ts`.
+ */
+export interface MailboxRawOps {
+  getThreadedEmails(options: { folder: string; page?: number; limit?: number }): Promise<Email[]>;
+  countThreadedEmails(folder: string): Promise<number>;
+  getThreadEmails(threadId: string): Promise<Email[]>;
+  searchEmails(options: SearchFilters & { page?: number; limit?: number }): Promise<Email[]>;
+  countSearchResults(options: SearchFilters): Promise<number>;
+  checkSendRateLimit(): Promise<string | null>;
+}
+
+export function rawOps(stub: MailboxStub): MailboxRawOps {
+  return stub as unknown as MailboxRawOps;
+}
+
+/**
+ * Narrow a Drizzle row to the DTO the UI consumes. The columns are nullable in
+ * SQLite but always populated by `createEmail`, so the API is the boundary
+ * where they become `Email`.
+ */
+export function toEmail<T>(row: T): T extends null ? null : Email {
+  return row as T extends null ? null : Email;
+}
+
+export function toEmails(rows: unknown[]): Email[] {
+  return rows as Email[];
+}
 
 export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) => {
   const rawId = c.req.param("mailboxId");

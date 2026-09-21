@@ -49,17 +49,36 @@ export interface AttachmentInfo {
 
 // ── Zod Schemas ────────────────────────────────────────────────────
 
-const RecipientFieldSchema = z.union([z.email(), z.array(z.email()).min(1)]);
+const recipientFieldSchema = z.union([z.email(), z.array(z.email()).min(1)]);
 
-export const ErrorResponseSchema = z.object({
+export const errorResponseSchema = z.object({
   error: z.string(),
 });
 
-export const SendEmailRequestSchema = z
+/**
+ * Mailbox settings. Mirrors `MailboxSettings` in `app/types`; unknown keys are
+ * stripped rather than passed through, so the RPC client's request type stays
+ * a closed object it can actually check.
+ *
+ * `agentSystemPrompt` is deliberately free text -- it goes straight to the AI.
+ */
+export const mailboxSettingsSchema = z.object({
+  fromName: z.string().optional(),
+  forwarding: z.object({ enabled: z.boolean(), email: z.string() }).optional(),
+  signature: z
+    .object({ enabled: z.boolean(), text: z.string(), html: z.string().optional() })
+    .optional(),
+  autoReply: z
+    .object({ enabled: z.boolean(), subject: z.string(), message: z.string() })
+    .optional(),
+  agentSystemPrompt: z.string().optional(),
+});
+
+export const sendEmailRequestSchema = z
   .object({
-    to: RecipientFieldSchema,
-    cc: RecipientFieldSchema.optional(),
-    bcc: RecipientFieldSchema.optional(),
+    to: recipientFieldSchema,
+    cc: recipientFieldSchema.optional(),
+    bcc: recipientFieldSchema.optional(),
     from: z.union([z.email(), z.object({ email: z.email(), name: z.string() })]),
     subject: z.string(),
     html: z.string().optional(),
@@ -83,7 +102,9 @@ export const SendEmailRequestSchema = z
     error: "Either 'html' or 'text' must be provided",
   });
 
-export const SendEmailResponseSchema = z.object({
+export type SendEmailRequest = z.infer<typeof sendEmailRequestSchema>;
+
+export const sendEmailResponseSchema = z.object({
   id: z.string(),
   status: z.string(),
 });

@@ -258,8 +258,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
       setError("No mailbox selected.");
       return;
     }
-    const toRecipients = splitEmailList(to);
-    if (toRecipients.length === 0) {
+    const toValue = toEmailListValue(splitEmailList(to));
+    if (toValue === undefined) {
       setError("Add at least one recipient.");
       return;
     }
@@ -271,7 +271,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
         ? { email: currentMailbox.email, name: fromName }
         : currentMailbox.email;
     const emailData = {
-      to: toEmailListValue(toRecipients),
+      to: toValue,
       cc: toEmailListValue(ccRecipients),
       bcc: toEmailListValue(bccRecipients),
       from,

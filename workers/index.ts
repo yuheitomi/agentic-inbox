@@ -419,6 +419,8 @@ app.get(
     if (!obj) return c.json({ error: "Attachment file not found" }, 404);
     const headers = new Headers();
     headers.set("Content-Type", attachment.mimetype);
+    // Strip control chars and quotes: they would allow header injection.
+    // eslint-disable-next-line no-control-regex
     const sanitized = attachment.filename.replace(/[\x00-\x1f"\\]/g, "_");
     headers.set(
       "Content-Disposition",
@@ -498,6 +500,8 @@ async function receiveEmail(
   if (parsedEmail.attachments) {
     for (const att of parsedEmail.attachments) {
       const attId = crypto.randomUUID();
+      // Sanitize filename to prevent path traversal in R2 keys
+      // eslint-disable-next-line no-control-regex
       const filename = (att.filename || "untitled").replace(/[/\\:*?"<>|\x00-\x1f]/g, "_");
       await env.BUCKET.put(`attachments/${messageId}/${attId}/${filename}`, att.content);
       attachmentData.push({

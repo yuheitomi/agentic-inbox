@@ -6,29 +6,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { type MailboxSettings } from "~/services/api";
 import { queryKeys } from "./keys";
 
-export function useMailboxes() {
-  return useQuery({
-    queryKey: queryKeys.mailboxes.all,
-    queryFn: () => api.listMailboxes(),
-  });
-}
-
 export function useMailbox(mailboxId: string | undefined) {
   return useQuery({
     queryKey: mailboxId ? queryKeys.mailboxes.detail(mailboxId) : ["mailboxes", "_disabled"],
     queryFn: () => api.getMailbox(mailboxId!),
     enabled: !!mailboxId,
-  });
-}
-
-export function useCreateMailbox() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ email, name }: { email: string; name: string }) =>
-      api.createMailbox(email, name),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
-    },
   });
 }
 
@@ -39,16 +21,6 @@ export function useUpdateMailbox() {
       api.updateMailbox(mailboxId, settings),
     onSuccess: (_data, { mailboxId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.detail(mailboxId) });
-      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
-    },
-  });
-}
-
-export function useDeleteMailbox() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (mailboxId: string) => api.deleteMailbox(mailboxId),
-    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
     },
   });

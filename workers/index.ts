@@ -18,8 +18,8 @@ import {
   listMailboxes,
 } from "./lib/email-helpers";
 import { rawOps, requireMailbox, toEmail, toEmails, type MailboxContext } from "./lib/mailbox";
-import { MailboxSettingsSchema, SendEmailRequestSchema } from "./lib/schemas";
-import { boolParam, numericParam, zJson, zQuery } from "./lib/validate";
+import { mailboxSettingsSchema, sendEmailRequestSchema } from "./lib/schemas";
+import { boolParamSchema, numericParamSchema, zJson, zQuery } from "./lib/validate";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import type { Env } from "./types";
 
@@ -29,17 +29,17 @@ import type { Env } from "./types";
 // a 400, registering a validator is what lets `hc<AppType>` type the request
 // side of each call in `app/services/api.ts`.
 
-const CreateMailboxBody = z.object({
+const createMailboxBodySchema = z.object({
   email: z.email(),
   name: z.string().min(1),
-  settings: MailboxSettingsSchema.optional(),
+  settings: mailboxSettingsSchema.optional(),
 });
 
-const UpdateMailboxBody = z.object({
-  settings: MailboxSettingsSchema,
+const updateMailboxBodySchema = z.object({
+  settings: mailboxSettingsSchema,
 });
 
-const DraftBody = z.object({
+const draftBodySchema = z.object({
   to: z.string().optional(),
   cc: z.string().optional(),
   bcc: z.string().optional(),
@@ -50,32 +50,32 @@ const DraftBody = z.object({
   draft_id: z.string().optional(),
 });
 
-const UpdateEmailBody = z.object({
+const updateEmailBodySchema = z.object({
   read: z.boolean().optional(),
   starred: z.boolean().optional(),
 });
 
-const MoveEmailBody = z.object({
+const moveEmailBodySchema = z.object({
   folderId: z.string().min(1),
 });
 
-const FolderBody = z.object({
+const folderBodySchema = z.object({
   name: z.string().min(1),
 });
 
-const ListEmailsQuery = z.object({
+const listEmailsQuerySchema = z.object({
   folder: z.string().optional(),
   thread_id: z.string().optional(),
-  threaded: boolParam,
-  page: numericParam,
-  limit: numericParam,
+  threaded: boolParamSchema,
+  page: numericParamSchema,
+  limit: numericParamSchema,
   sortColumn: z
     .enum(["id", "subject", "sender", "recipient", "date", "read", "starred"])
     .optional(),
   sortDirection: z.enum(["ASC", "DESC"]).optional(),
 });
 
-const SearchQuery = z.object({
+const searchQuerySchema = z.object({
   query: z.string().optional(),
   folder: z.string().optional(),
   from: z.string().optional(),
@@ -83,11 +83,11 @@ const SearchQuery = z.object({
   subject: z.string().optional(),
   date_start: z.string().optional(),
   date_end: z.string().optional(),
-  is_read: boolParam,
-  is_starred: boolParam,
-  has_attachment: boolParam,
-  page: numericParam,
-  limit: numericParam,
+  is_read: boolParamSchema,
+  is_starred: boolParamSchema,
+  has_attachment: boolParamSchema,
+  page: numericParamSchema,
+  limit: numericParamSchema,
 });
 
 // -- Response shapes ------------------------------------------------
@@ -167,7 +167,7 @@ const routes = app
     return c.json(result);
   })
 
-  .post("/api/v1/mailboxes", zJson(CreateMailboxBody), async (c) => {
+  .post("/api/v1/mailboxes", zJson(createMailboxBodySchema), async (c) => {
     const { name, settings, email: rawEmail } = c.req.valid("json");
     const email = rawEmail.toLowerCase();
     const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
@@ -206,7 +206,7 @@ const routes = app
     return c.json(mailbox);
   })
 
-  .put("/api/v1/mailboxes/:mailboxId", zJson(UpdateMailboxBody), async (c) => {
+  .put("/api/v1/mailboxes/:mailboxId", zJson(updateMailboxBodySchema), async (c) => {
     const mailboxId = c.req.param("mailboxId");
     const { settings } = c.req.valid("json");
     const key = `mailboxes/${mailboxId}.json`;
@@ -226,7 +226,7 @@ const routes = app
 
   // -- Emails -------------------------------------------------------
 
-  .get("/api/v1/mailboxes/:mailboxId/emails", zQuery(ListEmailsQuery), async (c) => {
+  .get("/api/v1/mailboxes/:mailboxId/emails", zQuery(listEmailsQuerySchema), async (c) => {
     const { folder, thread_id, threaded, page, limit, sortColumn, sortDirection } =
       c.req.valid("query");
     const stub = c.var.mailboxStub;
@@ -249,7 +249,7 @@ const routes = app
     return c.json({ emails: toEmails(rows), totalCount } satisfies EmailListResponse);
   })
 
-  .post("/api/v1/mailboxes/:mailboxId/emails", zJson(SendEmailRequestSchema), async (c) => {
+  .post("/api/v1/mailboxes/:mailboxId/emails", zJson(sendEmailRequestSchema), async (c) => {
     const mailboxId = c.req.param("mailboxId");
     const {
       to,
@@ -329,7 +329,7 @@ const routes = app
     return c.json({ id: messageId, status: "sent" }, 202);
   })
 
-  .post("/api/v1/mailboxes/:mailboxId/drafts", zJson(DraftBody), async (c) => {
+  .post("/api/v1/mailboxes/:mailboxId/drafts", zJson(draftBodySchema), async (c) => {
     const mailboxId = c.req.param("mailboxId");
     const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = c.req.valid("json");
     const stub = c.var.mailboxStub;
@@ -365,7 +365,7 @@ const routes = app
     return c.json(email);
   })
 
-  .put("/api/v1/mailboxes/:mailboxId/emails/:id", zJson(UpdateEmailBody), async (c) => {
+  .put("/api/v1/mailboxes/:mailboxId/emails/:id", zJson(updateEmailBodySchema), async (c) => {
     const { read, starred } = c.req.valid("json");
     const email = toEmail(
       await c.var.mailboxStub.updateEmail(c.req.param("id"), { read, starred }),
@@ -384,7 +384,7 @@ const routes = app
     return c.body(null, 204);
   })
 
-  .post("/api/v1/mailboxes/:mailboxId/emails/:id/move", zJson(MoveEmailBody), async (c) => {
+  .post("/api/v1/mailboxes/:mailboxId/emails/:id/move", zJson(moveEmailBodySchema), async (c) => {
     const { folderId } = c.req.valid("json");
     const success = await c.var.mailboxStub.moveEmail(c.req.param("id"), folderId);
     return success ? c.json({ status: "moved" }) : c.json({ error: "Folder not found" }, 400);
@@ -406,12 +406,12 @@ const routes = app
 
   .post(
     "/api/v1/mailboxes/:mailboxId/emails/:id/reply",
-    zJson(SendEmailRequestSchema),
+    zJson(sendEmailRequestSchema),
     handleReplyEmail,
   )
   .post(
     "/api/v1/mailboxes/:mailboxId/emails/:id/forward",
-    zJson(SendEmailRequestSchema),
+    zJson(sendEmailRequestSchema),
     handleForwardEmail,
   )
 
@@ -422,7 +422,7 @@ const routes = app
     return c.json(folders);
   })
 
-  .post("/api/v1/mailboxes/:mailboxId/folders", zJson(FolderBody), async (c) => {
+  .post("/api/v1/mailboxes/:mailboxId/folders", zJson(folderBodySchema), async (c) => {
     const { name } = c.req.valid("json");
     const slug = slugify(name);
     if (!slug) return c.json({ error: "Folder name must contain alphanumeric characters" }, 400);
@@ -432,7 +432,7 @@ const routes = app
       : c.json({ error: "Folder with this name already exists" }, 409);
   })
 
-  .put("/api/v1/mailboxes/:mailboxId/folders/:id", zJson(FolderBody), async (c) => {
+  .put("/api/v1/mailboxes/:mailboxId/folders/:id", zJson(folderBodySchema), async (c) => {
     const { name } = c.req.valid("json");
     const f = await c.var.mailboxStub.updateFolder(c.req.param("id"), name);
     return f ? c.json(f) : c.json({ error: "Folder not found" }, 404);
@@ -445,7 +445,7 @@ const routes = app
 
   // -- Search -------------------------------------------------------
 
-  .get("/api/v1/mailboxes/:mailboxId/search", zQuery(SearchQuery), async (c) => {
+  .get("/api/v1/mailboxes/:mailboxId/search", zQuery(searchQuerySchema), async (c) => {
     const { page, limit, query, ...filters } = c.req.valid("query");
     const searchOpts = { ...filters, query: query ?? "" };
     const search = rawOps(c.var.mailboxStub);

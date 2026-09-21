@@ -18,7 +18,7 @@ import type { EmailFull, SendEmailRequest } from "../lib/schemas";
 import type { JsonContext } from "../lib/validate";
 
 /**
- * Both handlers are mounted with `zJson(SendEmailRequestSchema)`, so the body
+ * Both handlers are mounted with `zJson(sendEmailRequestSchema)`, so the body
  * arrives already parsed on `c.req.valid("json")`.
  */
 type AppContext = JsonContext<SendEmailRequest>;

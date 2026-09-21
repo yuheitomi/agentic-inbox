@@ -43,13 +43,13 @@ export function zQuery<T extends z.ZodType>(schema: T) {
  * string union so the RPC client's `query` argument stays honest about what
  * goes over the wire, while handlers read the coerced value.
  */
-export const numericParam = z
+export const numericParamSchema = z
   .string()
   .regex(/^\d+$/, "must be a non-negative integer")
   .transform(Number)
   .optional();
 
-export const boolParam = z
+export const boolParamSchema = z
   .enum(["true", "false", "1", "0"])
   .transform((v) => v === "true" || v === "1")
   .optional();

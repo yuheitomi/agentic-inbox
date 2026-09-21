@@ -49,9 +49,9 @@ export interface AttachmentInfo {
 
 // ── Zod Schemas ────────────────────────────────────────────────────
 
-const RecipientFieldSchema = z.union([z.email(), z.array(z.email()).min(1)]);
+const recipientFieldSchema = z.union([z.email(), z.array(z.email()).min(1)]);
 
-export const ErrorResponseSchema = z.object({
+export const errorResponseSchema = z.object({
   error: z.string(),
 });
 
@@ -62,7 +62,7 @@ export const ErrorResponseSchema = z.object({
  *
  * `agentSystemPrompt` is deliberately free text -- it goes straight to the AI.
  */
-export const MailboxSettingsSchema = z.object({
+export const mailboxSettingsSchema = z.object({
   fromName: z.string().optional(),
   forwarding: z.object({ enabled: z.boolean(), email: z.string() }).optional(),
   signature: z
@@ -74,11 +74,11 @@ export const MailboxSettingsSchema = z.object({
   agentSystemPrompt: z.string().optional(),
 });
 
-export const SendEmailRequestSchema = z
+export const sendEmailRequestSchema = z
   .object({
-    to: RecipientFieldSchema,
-    cc: RecipientFieldSchema.optional(),
-    bcc: RecipientFieldSchema.optional(),
+    to: recipientFieldSchema,
+    cc: recipientFieldSchema.optional(),
+    bcc: recipientFieldSchema.optional(),
     from: z.union([z.email(), z.object({ email: z.email(), name: z.string() })]),
     subject: z.string(),
     html: z.string().optional(),
@@ -102,9 +102,9 @@ export const SendEmailRequestSchema = z
     error: "Either 'html' or 'text' must be provided",
   });
 
-export type SendEmailRequest = z.infer<typeof SendEmailRequestSchema>;
+export type SendEmailRequest = z.infer<typeof sendEmailRequestSchema>;
 
-export const SendEmailResponseSchema = z.object({
+export const sendEmailResponseSchema = z.object({
   id: z.string(),
   status: z.string(),
 });

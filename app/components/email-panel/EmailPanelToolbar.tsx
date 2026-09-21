@@ -23,7 +23,6 @@ import type { Folder, Email } from "~/types";
 
 interface EmailPanelToolbarProps {
   email: Email;
-  mailboxId?: string;
   isDraftFolder: boolean;
   isSending: boolean;
   moveToFolders: Folder[];
@@ -43,7 +42,6 @@ interface EmailPanelToolbarProps {
 
 export default function EmailPanelToolbar({
   email,
-  mailboxId,
   isDraftFolder,
   isSending,
   moveToFolders,

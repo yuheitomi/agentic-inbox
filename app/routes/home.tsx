@@ -2,16 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import {
-  Button,
-  Dialog,
-  Empty,
-  Input,
-  Loader,
-  Select,
-  Text,
-  useKumoToastManager,
-} from "@cloudflare/kumo";
+import { Button, Dialog, Input, Loader, Select, Text, useKumoToastManager } from "@cloudflare/kumo";
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useRef, useState } from "react";
@@ -76,13 +67,13 @@ export default function HomeRoute() {
     }
     autoCreateDone.current = true;
     let cancelled = false;
-    Promise.all(
+    void Promise.all(
       toCreate.map((addr) => {
         const localPart = addr.split("@")[0] || addr;
         return api.createMailbox(addr, localPart).catch(() => {});
       }),
     ).then(() => {
-      if (!cancelled) refetchMailboxes();
+      if (!cancelled) void refetchMailboxes();
     });
     return () => {
       cancelled = true;

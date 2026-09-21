@@ -28,7 +28,7 @@ export function useCreateMailbox() {
     mutationFn: ({ email, name }: { email: string; name: string }) =>
       api.createMailbox(email, name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
     },
   });
 }
@@ -39,8 +39,8 @@ export function useUpdateMailbox() {
     mutationFn: ({ mailboxId, settings }: { mailboxId: string; settings: unknown }) =>
       api.updateMailbox(mailboxId, settings),
     onSuccess: (_data, { mailboxId }) => {
-      qc.invalidateQueries({ queryKey: queryKeys.mailboxes.detail(mailboxId) });
-      qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.detail(mailboxId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
     },
   });
 }
@@ -50,7 +50,7 @@ export function useDeleteMailbox() {
   return useMutation({
     mutationFn: (mailboxId: string) => api.deleteMailbox(mailboxId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
     },
   });
 }

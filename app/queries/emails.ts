@@ -87,8 +87,8 @@ export function useThreadReplies(
 function useInvalidateEmailData() {
   const qc = useQueryClient();
   return (mailboxId: string) => {
-    qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
-    qc.invalidateQueries({
+    void qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
+    void qc.invalidateQueries({
       queryKey: queryKeys.folders.list(mailboxId),
     });
   };
@@ -162,8 +162,8 @@ export function useUpdateEmail() {
     },
     onSettled: (_data, _err, { mailboxId }) => {
       // Always refetch to ensure server truth
-      qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
-      qc.invalidateQueries({
+      void qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
+      void qc.invalidateQueries({
         queryKey: queryKeys.folders.list(mailboxId),
       });
     },
@@ -176,8 +176,8 @@ export function useMarkThreadRead() {
     mutationFn: ({ mailboxId, threadId }: { mailboxId: string; threadId: string }) =>
       api.markThreadRead(mailboxId, threadId),
     onSuccess: (_data, { mailboxId }) => {
-      qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
-      qc.invalidateQueries({
+      void qc.invalidateQueries({ queryKey: ["emails", mailboxId] });
+      void qc.invalidateQueries({
         queryKey: queryKeys.folders.list(mailboxId),
       });
     },

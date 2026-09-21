@@ -33,9 +33,9 @@ import { Folders } from "shared/folders";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { useRevalidateInterval } from "~/hooks/useRevalidateInterval";
 import { useUIStore } from "~/hooks/useUIStore";
-import { deleteEmailWithAttachments, requireMailboxStub, threadOps } from "~/lib/mailbox.server";
 import { getSnippetText } from "~/lib/utils";
 import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
+import { ok, okEmpty, serverApi } from "~/services/api.server";
 import type { Email } from "~/types";
 import type { Route } from "./+types/_layout";
 
@@ -48,18 +48,17 @@ export const EMAIL_DETAIL_ROUTE_ID = "routes/mailbox/$mailboxId/emails/$folder/$
 
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const mailboxId = decodeURIComponent(params.mailboxId);
-  const stub = await requireMailboxStub(context, mailboxId);
+  const api = serverApi(context, request);
 
   const rawPage = Number(new URL(request.url).searchParams.get("page") ?? "1");
   const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
 
-  // Both queries hit the same Durable Object; issuing them together lets the
-  // DO pipeline them rather than paying two sequential RPC round trips.
-  const threads = threadOps(stub);
-  const [emails, totalCount] = await Promise.all([
-    threads.getThreadedEmails({ folder: params.folder, page, limit: PAGE_SIZE }),
-    threads.countThreadedEmails(params.folder),
-  ]);
+  const { emails, totalCount } = await ok(
+    api.mailboxes[":mailboxId"].emails.$get({
+      param: { mailboxId },
+      query: { folder: params.folder, threaded: true, page, limit: PAGE_SIZE },
+    }),
+  );
 
   return { emails, totalCount, page };
 }
@@ -72,31 +71,56 @@ function field(form: FormData, key: string): string {
 
 export async function action({ params, request, context }: Route.ActionArgs) {
   const mailboxId = decodeURIComponent(params.mailboxId);
-  const stub = await requireMailboxStub(context, mailboxId);
+  const api = serverApi(context, request);
 
   const form = await request.formData();
   const intent = field(form, "intent");
   const emailId = field(form, "emailId");
+  const emailParam = { mailboxId, id: emailId };
 
   switch (intent) {
     case "star":
-      await stub.updateEmail(emailId, { starred: form.get("starred") === "true" });
+      await ok(
+        api.mailboxes[":mailboxId"].emails[":id"].$put({
+          param: emailParam,
+          json: { starred: form.get("starred") === "true" },
+        }),
+      );
       return { ok: true };
 
     case "read":
-      await stub.updateEmail(emailId, { read: form.get("read") === "true" });
+      await ok(
+        api.mailboxes[":mailboxId"].emails[":id"].$put({
+          param: emailParam,
+          json: { read: form.get("read") === "true" },
+        }),
+      );
       return { ok: true };
 
     case "markThreadRead": {
       const threadId = field(form, "threadId");
-      if (threadId) await stub.markThreadRead(threadId);
-      else await stub.updateEmail(emailId, { read: true });
+      if (threadId) {
+        await ok(
+          api.mailboxes[":mailboxId"].threads[":threadId"].read.$post({
+            param: { mailboxId, threadId },
+          }),
+        );
+      } else {
+        await ok(
+          api.mailboxes[":mailboxId"].emails[":id"].$put({
+            param: emailParam,
+            json: { read: true },
+          }),
+        );
+      }
       return { ok: true };
     }
 
     case "delete": {
-      const deleted = await deleteEmailWithAttachments(context, stub, emailId);
-      if (!deleted) return { ok: false, error: "Email not found" };
+      // The API deletes the email's attachment blobs from R2 along with it.
+      const res = await api.mailboxes[":mailboxId"].emails[":id"].$delete({ param: emailParam });
+      if (res.status === 404) return { ok: false, error: "Email not found" };
+      await okEmpty(res);
       // The row sends `redirectTo` when it is the one open in the reading
       // pane; the action cannot see the child route's `:emailId` itself.
       const redirectTo = field(form, "redirectTo");

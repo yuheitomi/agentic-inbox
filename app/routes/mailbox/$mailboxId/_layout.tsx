@@ -9,12 +9,36 @@ import ComposeEmail from "~/components/ComposeEmail";
 import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useUIStore } from "~/hooks/useUIStore";
-import { useMailbox } from "~/queries/mailboxes";
+import { requireMailbox } from "~/lib/mailbox.server";
+import type { Folder, Mailbox } from "~/types";
+import type { Route } from "./+types/_layout";
+
+/** Route id for `useRouteLoaderData` in descendants. */
+export const MAILBOX_ROUTE_ID = "routes/mailbox/$mailboxId/_layout";
+
+export interface MailboxLayoutData {
+  mailbox: Mailbox;
+  folders: Folder[];
+}
+
+/**
+ * Loads the mailbox record and its folder list -- the data the sidebar needs.
+ * Runs in the Worker, so it calls the Durable Object directly rather than
+ * fetching `/api/v1/mailboxes/:id` back through the network.
+ */
+export async function loader({ params, context }: Route.LoaderArgs): Promise<MailboxLayoutData> {
+  const mailboxId = decodeURIComponent(params.mailboxId);
+  const { stub, settings } = await requireMailbox(context, mailboxId);
+  const folders = (await stub.getFolders()) as Folder[];
+
+  return {
+    mailbox: { id: mailboxId, email: mailboxId, name: mailboxId, settings },
+    folders,
+  };
+}
 
 export default function MailboxRoute() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
-  // Prefetch mailbox data for child components
-  useMailbox(mailboxId);
   const prevMailboxIdRef = useRef<string | undefined>(undefined);
   const { isSidebarOpen, closeSidebar, isAgentPanelOpen, closePanel, closeComposeModal } =
     useUIStore();

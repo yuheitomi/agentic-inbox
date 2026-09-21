@@ -16,20 +16,122 @@ import {
   TrashIcon,
   TrayIcon,
 } from "@phosphor-icons/react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { useMemo } from "react";
+import {
+  Link,
+  redirect,
+  useFetcher,
+  useMatches,
+  useNavigation,
+  useRevalidator,
+  useRouteLoaderData,
+  useSearchParams,
+  type ShouldRevalidateFunctionArgs,
+} from "react-router";
 import { formatListDate } from "shared/dates";
 import { Folders } from "shared/folders";
 import MailboxSplitView from "~/components/MailboxSplitView";
+import { useRevalidateInterval } from "~/hooks/useRevalidateInterval";
 import { useUIStore } from "~/hooks/useUIStore";
+import { deleteEmailWithAttachments, requireMailboxStub, threadOps } from "~/lib/mailbox.server";
 import { getSnippetText } from "~/lib/utils";
-import { useDeleteEmail, useEmails, useMarkThreadRead, useUpdateEmail } from "~/queries/emails";
-import { useFolders } from "~/queries/folders";
-import { queryKeys } from "~/queries/keys";
+import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
 import type { Email } from "~/types";
+import type { Route } from "./+types/_layout";
 
 const PAGE_SIZE = 25;
+const POLL_INTERVAL_MS = 30_000;
+
+export const EMAIL_DETAIL_ROUTE_ID = "routes/mailbox/$mailboxId/emails/$folder/$emailId";
+
+// ── Data ───────────────────────────────────────────────────────────
+
+export async function loader({ params, request, context }: Route.LoaderArgs) {
+  const mailboxId = decodeURIComponent(params.mailboxId);
+  const stub = await requireMailboxStub(context, mailboxId);
+
+  const rawPage = Number(new URL(request.url).searchParams.get("page") ?? "1");
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+
+  // Both queries hit the same Durable Object; issuing them together lets the
+  // DO pipeline them rather than paying two sequential RPC round trips.
+  const threads = threadOps(stub);
+  const [emails, totalCount] = await Promise.all([
+    threads.getThreadedEmails({ folder: params.folder, page, limit: PAGE_SIZE }),
+    threads.countThreadedEmails(params.folder),
+  ]);
+
+  return { emails, totalCount, page };
+}
+
+/** `FormData.get` widens to `string | File | null`; these fields are always text. */
+function field(form: FormData, key: string): string {
+  const value = form.get(key);
+  return typeof value === "string" ? value : "";
+}
+
+export async function action({ params, request, context }: Route.ActionArgs) {
+  const mailboxId = decodeURIComponent(params.mailboxId);
+  const stub = await requireMailboxStub(context, mailboxId);
+
+  const form = await request.formData();
+  const intent = field(form, "intent");
+  const emailId = field(form, "emailId");
+
+  switch (intent) {
+    case "star":
+      await stub.updateEmail(emailId, { starred: form.get("starred") === "true" });
+      return { ok: true };
+
+    case "read":
+      await stub.updateEmail(emailId, { read: form.get("read") === "true" });
+      return { ok: true };
+
+    case "markThreadRead": {
+      const threadId = field(form, "threadId");
+      if (threadId) await stub.markThreadRead(threadId);
+      else await stub.updateEmail(emailId, { read: true });
+      return { ok: true };
+    }
+
+    case "delete": {
+      const deleted = await deleteEmailWithAttachments(context, stub, emailId);
+      if (!deleted) return { ok: false, error: "Email not found" };
+      // The row sends `redirectTo` when it is the one open in the reading
+      // pane; the action cannot see the child route's `:emailId` itself.
+      const redirectTo = field(form, "redirectTo");
+      if (redirectTo.startsWith("/")) return redirect(redirectTo);
+      return { ok: true };
+    }
+
+    default:
+      return { ok: false, error: `Unknown intent: ${intent}` };
+  }
+}
+
+/**
+ * The list must NOT refetch when the user selects a different email -- that
+ * navigation only changes the child route's `:emailId`. Without this, clicking
+ * through a thread list refetches 25 conversations every time.
+ */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  currentParams,
+  nextParams,
+  formMethod,
+}: ShouldRevalidateFunctionArgs) {
+  // Any mutation can change read state, starred state, or membership. Always
+  // revalidate rather than inspecting the action result -- a future action
+  // that returns nothing would otherwise silently stop refreshing the list.
+  if (formMethod && formMethod !== "GET") return true;
+  if (currentParams.folder !== nextParams.folder) return true;
+  if (currentParams.mailboxId !== nextParams.mailboxId) return true;
+  // Pagination and sort live in the query string.
+  return currentUrl.search !== nextUrl.search;
+}
+
+// ── Presentation ───────────────────────────────────────────────────
 
 const FOLDER_EMPTY_STATES: Record<
   string,
@@ -120,129 +222,224 @@ function FolderEmptyState({ folder, onCompose }: { folder?: string; onCompose: (
   );
 }
 
-export default function EmailListRoute() {
-  const { mailboxId, folder } = useParams<{
-    mailboxId: string;
-    folder: string;
-  }>();
-  const { selectedEmailId, isComposing, selectEmail, closePanel, startCompose } = useUIStore();
-  const [page, setPage] = useState(1);
+function hasUnread(email: Email): boolean {
+  if (email.thread_unread_count !== undefined) return email.thread_unread_count > 0;
+  return !email.read;
+}
 
-  const queryClient = useQueryClient();
-  const updateEmail = useUpdateEmail();
-  const markThreadRead = useMarkThreadRead();
-  const deleteEmail = useDeleteEmail();
+function formatParticipants(email: Email): string {
+  if (email.participants) {
+    const names = email.participants
+      .split(",")
+      .map((p) => p.trim().split("@")[0])
+      .filter((name, idx, arr) => arr.indexOf(name) === idx);
+    if (names.length <= 3) return names.join(", ");
+    return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+  }
+  return email.sender.split("@")[0];
+}
 
-  const params = useMemo(
-    () => ({
-      folder: folder || "",
-      page: String(page),
-      limit: String(PAGE_SIZE),
-    }),
-    [folder, page],
+/**
+ * One row. Extracted so each row can own a `useFetcher`, which gives
+ * optimistic star/read state for free: `fetcher.formData` holds the pending
+ * submission, and it clears automatically if the action fails -- no cache
+ * snapshot or rollback code.
+ */
+function EmailRow({
+  email,
+  isSelected,
+  isPanelOpen,
+  search,
+  listPath,
+}: {
+  email: Email;
+  isSelected: boolean;
+  isPanelOpen: boolean;
+  search: string;
+  listPath: string;
+}) {
+  const fetcher = useFetcher<typeof action>();
+
+  const pendingIntent = fetcher.formData?.get("intent");
+  const starred =
+    pendingIntent === "star" ? fetcher.formData?.get("starred") === "true" : email.starred;
+  const read = pendingIntent === "read" ? fetcher.formData?.get("read") === "true" : email.read;
+  const isDeleting = pendingIntent === "delete";
+
+  const unread = pendingIntent === "read" ? !read : hasUnread(email);
+  const snippet = getSnippetText(email.snippet);
+
+  if (isDeleting) return null;
+
+  return (
+    <div
+      className={`group flex items-center gap-3 w-full border-b border-kumo-line px-4 md:px-6 ${
+        isPanelOpen ? "md:px-4" : ""
+      } ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
+    >
+      {/* Unread dot */}
+      <div className="w-2.5 shrink-0 flex justify-center">
+        {unread && <div className="h-2 w-2 rounded-full bg-kumo-brand" />}
+      </div>
+
+      {/* Star */}
+      <fetcher.Form method="post" className="shrink-0 flex">
+        <input type="hidden" name="intent" value="star" />
+        <input type="hidden" name="emailId" value={email.id} />
+        <input type="hidden" name="starred" value={String(!starred)} />
+        <button
+          type="submit"
+          className="p-0.5 bg-transparent border-0 cursor-pointer"
+          aria-label={starred ? "Unstar" : "Star"}
+        >
+          <StarIcon
+            size={16}
+            weight={starred ? "fill" : "regular"}
+            className={starred ? "text-kumo-warning" : "text-kumo-subtle hover:text-kumo-warning"}
+          />
+        </button>
+      </fetcher.Form>
+
+      {/* Content -- a real anchor, so cmd-click and middle-click work */}
+      <Link
+        to={{ pathname: email.id, search }}
+        prefetch="intent"
+        className={`min-w-0 flex-1 block no-underline text-inherit py-2.5 ${
+          isPanelOpen ? "md:py-2.5" : "md:py-3"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span
+            className={`truncate text-sm ${
+              unread ? "font-semibold text-kumo-default" : "text-kumo-strong"
+            }`}
+          >
+            {formatParticipants(email)}
+          </span>
+          {(email.thread_count ?? 1) > 1 && (
+            <span className="shrink-0 text-xs text-kumo-subtle bg-kumo-fill rounded-full px-1.5 py-0.5 font-medium">
+              {email.thread_count}
+            </span>
+          )}
+          {email.has_draft && (
+            <span className="shrink-0 text-xs text-kumo-destructive font-medium">Draft</span>
+          )}
+          {email.needs_reply && !email.has_draft && (
+            <Tooltip content="Needs reply" asChild>
+              <span className="shrink-0 text-kumo-warning">
+                <ArrowBendUpLeftIcon size={14} weight="bold" />
+              </span>
+            </Tooltip>
+          )}
+          <span className="text-sm text-kumo-subtle shrink-0 ml-auto">
+            {formatListDate(email.date)}
+          </span>
+        </div>
+        <div className="truncate text-sm mt-0.5">
+          <span className={unread ? "font-medium text-kumo-default" : "text-kumo-subtle"}>
+            {email.subject}
+          </span>
+          {snippet && <span className="text-kumo-subtle font-normal"> &mdash; {snippet}</span>}
+        </div>
+      </Link>
+
+      {/* Hover actions */}
+      <div className="hidden group-hover:flex items-center shrink-0">
+        <fetcher.Form method="post" className="flex">
+          <input type="hidden" name="intent" value="read" />
+          <input type="hidden" name="emailId" value={email.id} />
+          <input type="hidden" name="read" value={String(!read)} />
+          <Tooltip content={read ? "Mark unread" : "Mark read"} asChild>
+            <Button
+              type="submit"
+              variant="ghost"
+              shape="square"
+              size="sm"
+              icon={read ? <EnvelopeSimpleIcon size={14} /> : <EnvelopeOpenIcon size={14} />}
+              aria-label={read ? "Mark unread" : "Mark read"}
+            />
+          </Tooltip>
+        </fetcher.Form>
+
+        <fetcher.Form
+          method="post"
+          className="flex"
+          onSubmit={(e) => {
+            if (!window.confirm("Are you sure you want to delete this email?")) {
+              e.preventDefault();
+            }
+          }}
+        >
+          <input type="hidden" name="intent" value="delete" />
+          <input type="hidden" name="emailId" value={email.id} />
+          {isSelected && <input type="hidden" name="redirectTo" value={`${listPath}${search}`} />}
+          <Tooltip content="Delete" asChild>
+            <Button
+              type="submit"
+              variant="ghost"
+              shape="square"
+              size="sm"
+              icon={<TrashIcon size={14} />}
+              aria-label="Delete"
+            />
+          </Tooltip>
+        </fetcher.Form>
+      </div>
+    </div>
   );
+}
 
-  const { data: emailData, isFetching: isRefreshing } = useEmails(mailboxId, params, {
-    refetchInterval: 30_000,
-  });
+// ── Route ──────────────────────────────────────────────────────────
 
-  const emails = emailData?.emails ?? [];
-  const totalCount = emailData?.totalCount ?? 0;
+export default function EmailListRoute({ loaderData, params }: Route.ComponentProps) {
+  const { emails, totalCount, page } = loaderData;
+  const { folder } = params;
 
-  const { data: folders = [] } = useFolders(mailboxId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigation = useNavigation();
+  const revalidator = useRevalidator();
+  const { startCompose } = useUIStore();
 
+  useRevalidateInterval(POLL_INTERVAL_MS);
+
+  // `useParams` in a parent route does not see descendant params, so read the
+  // selected email from the match list instead.
+  const matches = useMatches();
+  const selectedEmailId =
+    (
+      matches.find((m) => m.id === EMAIL_DETAIL_ROUTE_ID)?.params as
+        | { emailId?: string }
+        | undefined
+    )?.emailId ?? null;
+
+  const folders = useRouteLoaderData<MailboxLayoutData>(MAILBOX_ROUTE_ID)?.folders ?? [];
   const folderName = useMemo(() => {
     const found = folders.find((f) => f.id === folder);
     if (found) return found.name;
     return folder ? folder.charAt(0).toUpperCase() + folder.slice(1) : "Inbox";
   }, [folders, folder]);
 
-  const isPanelOpen = selectedEmailId !== null || isComposing;
+  const isRefreshing = revalidator.state !== "idle" || navigation.state === "loading";
+  const isChangingFolder =
+    navigation.state === "loading" && navigation.location?.pathname.includes("/emails/");
+  const isPanelOpen = selectedEmailId !== null;
+  const search = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  const listPath = `/mailbox/${encodeURIComponent(params.mailboxId)}/emails/${folder}`;
 
-  // Track folder identity to detect folder changes vs page changes
-  const prevFolderRef = useRef<string | undefined>(undefined);
-
-  useEffect(() => {
-    const folderChanged = prevFolderRef.current !== `${mailboxId}/${folder}`;
-    prevFolderRef.current = `${mailboxId}/${folder}`;
-
-    if (folderChanged) {
-      closePanel();
-      setPage(1);
-    }
-  }, [mailboxId, folder, closePanel]);
-
-  const toggleStar = (e: React.MouseEvent, email: Email) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (mailboxId)
-      updateEmail.mutate({
-        mailboxId,
-        id: email.id,
-        data: { starred: !email.starred },
-      });
-  };
-
-  const handleDelete = (e: React.MouseEvent, emailId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (mailboxId) {
-      const confirmed = window.confirm("Are you sure you want to delete this email?");
-      if (!confirmed) return;
-      deleteEmail.mutate({ mailboxId, id: emailId });
-      if (selectedEmailId === emailId) closePanel();
-    }
-  };
-
-  const handleRefresh = () => {
-    if (mailboxId) {
-      void queryClient.invalidateQueries({ queryKey: ["emails", mailboxId] });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.folders.list(mailboxId),
-      });
-    }
-  };
-
-  // Thread-aware helpers
-  const hasUnread = (email: Email): boolean => {
-    if (email.thread_unread_count !== undefined) {
-      return email.thread_unread_count > 0;
-    }
-    return !email.read;
-  };
-
-  const handleRowClick = (email: Email) => {
-    selectEmail(email.id);
-    if (mailboxId && hasUnread(email)) {
-      if (email.thread_id && email.thread_count && email.thread_count > 1) {
-        markThreadRead.mutate({
-          mailboxId,
-          threadId: email.thread_id,
-        });
-      } else {
-        updateEmail.mutate({
-          mailboxId,
-          id: email.id,
-          data: { read: true },
-        });
-      }
-    }
-  };
-
-  const formatParticipants = (email: Email): string => {
-    if (email.participants) {
-      const names = email.participants
-        .split(",")
-        .map((p) => p.trim().split("@")[0])
-        .filter((name, idx, arr) => arr.indexOf(name) === idx);
-      if (names.length <= 3) return names.join(", ");
-      return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
-    }
-    return email.sender.split("@")[0];
+  const setPage = (next: number) => {
+    setSearchParams(
+      (prev) => {
+        const nextParams = new URLSearchParams(prev);
+        if (next <= 1) nextParams.delete("page");
+        else nextParams.set("page", String(next));
+        return nextParams;
+      },
+      { preventScrollReset: true },
+    );
   };
 
   return (
-    <MailboxSplitView selectedEmailId={selectedEmailId} isComposing={isComposing}>
+    <MailboxSplitView>
       {/* Folder header */}
       <div className="flex items-center justify-between px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
         <h1 className="text-lg font-semibold text-kumo-default">{folderName}</h1>
@@ -260,7 +457,7 @@ export default function EmailListRoute() {
               icon={
                 <ArrowsClockwiseIcon size={18} className={isRefreshing ? "animate-spin" : ""} />
               }
-              onClick={handleRefresh}
+              onClick={() => void revalidator.revalidate()}
               disabled={isRefreshing}
               aria-label="Refresh"
             />
@@ -270,137 +467,20 @@ export default function EmailListRoute() {
 
       {/* Email rows */}
       <div className="flex-1 overflow-y-auto">
-        {isRefreshing && emails.length === 0 ? (
+        {isChangingFolder && emails.length === 0 ? (
           <EmailListSkeleton />
         ) : emails.length > 0 ? (
           <div>
-            {emails.map((email) => {
-              const isSelected = selectedEmailId === email.id;
-              const snippet = getSnippetText(email.snippet);
-              return (
-                <div
-                  key={email.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleRowClick(email)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleRowClick(email);
-                    }
-                  }}
-                  className={`group flex items-center gap-3 w-full text-left cursor-pointer transition-colors border-b border-kumo-line px-4 py-2.5 md:px-6 md:py-3 ${
-                    isPanelOpen ? "md:px-4 md:py-2.5" : ""
-                  } ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
-                >
-                  {/* Unread dot */}
-                  <div className="w-2.5 shrink-0 flex justify-center">
-                    {hasUnread(email) && <div className="h-2 w-2 rounded-full bg-kumo-brand" />}
-                  </div>
-
-                  {/* Star */}
-                  <button
-                    type="button"
-                    className="shrink-0 p-0.5 bg-transparent border-0 cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleStar(e, email);
-                    }}
-                  >
-                    <StarIcon
-                      size={16}
-                      weight={email.starred ? "fill" : "regular"}
-                      className={
-                        email.starred
-                          ? "text-kumo-warning"
-                          : "text-kumo-subtle hover:text-kumo-warning"
-                      }
-                    />
-                  </button>
-
-                  {/* Content */}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`truncate text-sm ${hasUnread(email) ? "font-semibold text-kumo-default" : "text-kumo-strong"}`}
-                      >
-                        {formatParticipants(email)}
-                      </span>
-                      {(email.thread_count ?? 1) > 1 && (
-                        <span className="shrink-0 text-xs text-kumo-subtle bg-kumo-fill rounded-full px-1.5 py-0.5 font-medium">
-                          {email.thread_count}
-                        </span>
-                      )}
-                      {email.has_draft && (
-                        <span className="shrink-0 text-xs text-kumo-destructive font-medium">
-                          Draft
-                        </span>
-                      )}
-                      {email.needs_reply && !email.has_draft && (
-                        <Tooltip content="Needs reply" asChild>
-                          <span className="shrink-0 text-kumo-warning">
-                            <ArrowBendUpLeftIcon size={14} weight="bold" />
-                          </span>
-                        </Tooltip>
-                      )}
-                      <span className="text-sm text-kumo-subtle shrink-0 ml-auto">
-                        {formatListDate(email.date)}
-                      </span>
-                    </div>
-                    <div className="truncate text-sm mt-0.5">
-                      <span
-                        className={
-                          hasUnread(email) ? "font-medium text-kumo-default" : "text-kumo-subtle"
-                        }
-                      >
-                        {email.subject}
-                      </span>
-                      {snippet && (
-                        <span className="text-kumo-subtle font-normal"> &mdash; {snippet}</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Hover actions */}
-                  <div className="hidden group-hover:flex items-center shrink-0">
-                    <Tooltip content={email.read ? "Mark unread" : "Mark read"} asChild>
-                      <Button
-                        variant="ghost"
-                        shape="square"
-                        size="sm"
-                        icon={
-                          email.read ? (
-                            <EnvelopeSimpleIcon size={14} />
-                          ) : (
-                            <EnvelopeOpenIcon size={14} />
-                          )
-                        }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (mailboxId)
-                            updateEmail.mutate({
-                              mailboxId,
-                              id: email.id,
-                              data: { read: !email.read },
-                            });
-                        }}
-                        aria-label={email.read ? "Mark unread" : "Mark read"}
-                      />
-                    </Tooltip>
-                    <Tooltip content="Delete" asChild>
-                      <Button
-                        variant="ghost"
-                        shape="square"
-                        size="sm"
-                        icon={<TrashIcon size={14} />}
-                        onClick={(e) => handleDelete(e, email.id)}
-                        aria-label="Delete"
-                      />
-                    </Tooltip>
-                  </div>
-                </div>
-              );
-            })}
+            {emails.map((email) => (
+              <EmailRow
+                key={email.id}
+                email={email}
+                isSelected={selectedEmailId === email.id}
+                isPanelOpen={isPanelOpen}
+                search={search}
+                listPath={listPath}
+              />
+            ))}
           </div>
         ) : (
           <FolderEmptyState folder={folder} onCompose={() => startCompose()} />

@@ -3,21 +3,33 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import type { ReactNode } from "react";
+import { useOutlet } from "react-router";
 import ComposePanel from "~/components/ComposePanel";
-import EmailPanel from "~/components/EmailPanel";
+import EmailPanelQuery from "~/components/EmailPanelQuery";
+import { useUIStore } from "~/hooks/useUIStore";
 
 interface MailboxSplitViewProps {
-  selectedEmailId: string | null;
-  isComposing: boolean;
+  /**
+   * Legacy selection, still used by the search results route. The email list
+   * route drives the reading pane through a nested route instead, which this
+   * component picks up via `useOutlet`.
+   */
+  selectedEmailId?: string | null;
+  isComposing?: boolean;
   children: ReactNode;
 }
 
 export default function MailboxSplitView({
-  selectedEmailId,
-  isComposing,
+  selectedEmailId = null,
+  isComposing: isComposingProp,
   children,
 }: MailboxSplitViewProps) {
-  const isPanelOpen = selectedEmailId !== null || isComposing;
+  const outlet = useOutlet();
+  const isComposingStore = useUIStore((s) => s.isComposing);
+  const isComposing = isComposingProp ?? isComposingStore;
+
+  const detail = outlet ?? (selectedEmailId ? <EmailPanelQuery emailId={selectedEmailId} /> : null);
+  const isPanelOpen = detail !== null || isComposing;
 
   return (
     <div className="flex h-full">
@@ -30,18 +42,16 @@ export default function MailboxSplitView({
       </div>
       {isPanelOpen && (
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full md:w-auto">
-          {isComposing && !selectedEmailId ? (
+          {isComposing && !detail ? (
             <ComposePanel />
-          ) : isComposing && selectedEmailId ? (
+          ) : isComposing && detail ? (
             <div className="flex flex-col h-full overflow-y-auto">
               <ComposePanel />
-              <div className="border-t border-kumo-line">
-                <EmailPanel emailId={selectedEmailId} />
-              </div>
+              <div className="border-t border-kumo-line">{detail}</div>
             </div>
-          ) : selectedEmailId ? (
-            <EmailPanel emailId={selectedEmailId} />
-          ) : null}
+          ) : (
+            detail
+          )}
         </div>
       )}
     </div>

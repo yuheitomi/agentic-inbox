@@ -4,7 +4,7 @@
 
 import { useKumoToastManager } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useRevalidator } from "react-router";
 import { Folders } from "shared/folders";
 import EmailPanelDialogs from "~/components/email-panel/EmailPanelDialogs";
 import EmailPanelHeader from "~/components/email-panel/EmailPanelHeader";
@@ -15,19 +15,15 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { splitEmailList, toEmailListValue } from "~/lib/utils";
 import {
   useDeleteEmail,
-  useEmail,
   useMoveEmail,
   useReplyToEmail,
   useSendEmail,
-  useThreadReplies,
   useUpdateEmail,
 } from "~/queries/emails";
-import { useFolders } from "~/queries/folders";
-import { useMailbox } from "~/queries/mailboxes";
 import api from "~/services/api";
 import type { Email, Folder, Mailbox } from "~/types";
 
-function EmailPanelSkeleton() {
+export function EmailPanelSkeleton() {
   return (
     <div className="animate-pulse p-5 space-y-4">
       <div className="h-5 w-2/3 rounded bg-kumo-fill" />
@@ -48,22 +44,42 @@ function EmailPanelSkeleton() {
   );
 }
 
-export default function EmailPanel({ emailId }: { emailId: string }) {
+export interface EmailPanelProps {
+  email: Email;
+  /** Every message in the thread, including `email` itself. */
+  thread: Email[];
+  folders: Folder[];
+  mailbox?: Mailbox;
+  onClose: () => void;
+}
+
+/**
+ * Presentational reading pane. Its data arrives as props -- from the
+ * `email-detail` route loader on the list path, or from `EmailPanelQuery` on
+ * the search path, which still fetches client-side.
+ */
+export default function EmailPanel({ email, thread, folders, mailbox, onClose }: EmailPanelProps) {
   const { mailboxId, folder } = useParams<{ mailboxId: string; folder: string }>();
-  const { data: email } = useEmail(mailboxId, emailId) as { data?: Email };
-  const { data: threadRepliesRaw } = useThreadReplies(mailboxId, email?.thread_id) as {
-    data?: Email[];
-  };
+  const emailId = email.id;
+  const currentMailbox = mailbox;
+  const threadRepliesRaw = thread;
+  const revalidator = useRevalidator();
   const updateEmail = useUpdateEmail();
   const deleteEmailMut = useDeleteEmail();
   const moveEmailMut = useMoveEmail();
   const sendEmailMut = useSendEmail();
   const replyMut = useReplyToEmail();
-  const { data: folders = [] } = useFolders(mailboxId) as { data?: Folder[] };
-  const { data: currentMailbox } = useMailbox(mailboxId) as {
-    data?: Mailbox;
+  const { startCompose } = useUIStore();
+
+  /**
+   * These mutations still go through TanStack Query, whose invalidation no
+   * longer backs the loader-driven list and sidebar. Revalidating the route
+   * chain keeps both in sync until the remaining mutations move to actions.
+   */
+  const closePanel = () => {
+    void revalidator.revalidate();
+    onClose();
   };
-  const { closePanel, startCompose } = useUIStore();
   const toastManager = useKumoToastManager();
   const [isSending, setIsSending] = useState(false);
   const [sourceViewEmail, setSourceViewEmail] = useState<Email | null>(null);
@@ -72,12 +88,11 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
   const isDraftFolder = folder === Folders.DRAFT;
 
   const threadReplies = useMemo(() => {
-    if (!threadRepliesRaw || !email) return [];
+    if (!threadRepliesRaw) return [];
     return threadRepliesRaw.filter((e) => e.id !== email.id);
   }, [threadRepliesRaw, email]);
 
   const allMessages = useMemo(() => {
-    if (!email) return [];
     return [email, ...threadReplies].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
@@ -85,7 +100,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
 
   // Reset expanded state only when the selected email changes, not on every refetch.
   // Using allMessages as a dependency would reset user expand/collapse state on background refetches.
-  const currentEmailId = email?.id;
+  const currentEmailId = email.id;
   useEffect(() => {
     if (allMessages.length > 1) setExpandedMessages(new Set([allMessages[0].id]));
   }, [currentEmailId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -117,15 +132,16 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
   }, [allMessages, draftMessageIds, currentMailbox?.email, email]);
 
   const moveToFolders = useMemo(() => {
-    const cur = folder || email?.folder_id;
+    const cur = folder || email.folder_id;
     return folders.filter((f) => f.id !== cur);
-  }, [folders, folder, email?.folder_id]);
-
-  if (!email) return <EmailPanelSkeleton />;
+  }, [folders, folder, email.folder_id]);
 
   const toggleStar = () => {
-    if (mailboxId)
-      updateEmail.mutate({ mailboxId, id: email.id, data: { starred: !email.starred } });
+    if (!mailboxId) return;
+    updateEmail.mutate(
+      { mailboxId, id: email.id, data: { starred: !email.starred } },
+      { onSettled: () => void revalidator.revalidate() },
+    );
   };
   const handleMove = (folderId: string) => {
     if (mailboxId) {
@@ -229,7 +245,7 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
         isDraftFolder={isDraftFolder}
         isSending={isSending}
         moveToFolders={moveToFolders}
-        onBack={closePanel}
+        onBack={onClose}
         onSendDraft={() => handleSendDraft()}
         onEditDraft={() => handleEditDraft()}
         onReply={() => startCompose({ mode: "reply", originalEmail: lastReceivedMessage })}
@@ -242,13 +258,11 @@ export default function EmailPanel({ emailId }: { emailId: string }) {
         onForward={() => startCompose({ mode: "forward", originalEmail: email })}
         onToggleStar={toggleStar}
         onToggleRead={() => {
-          if (mailboxId) {
-            updateEmail.mutate({
-              mailboxId,
-              id: email.id,
-              data: { read: !email.read },
-            });
-          }
+          if (!mailboxId) return;
+          updateEmail.mutate(
+            { mailboxId, id: email.id, data: { read: !email.read } },
+            { onSettled: () => void revalidator.revalidate() },
+          );
         }}
         onMove={handleMove}
         onViewSource={() => setSourceViewEmail(email)}

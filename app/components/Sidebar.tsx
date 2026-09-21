@@ -15,11 +15,11 @@ import {
   TrayIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
-import { NavLink, useNavigate, useParams } from "react-router";
+import { NavLink, useNavigate, useParams, useRevalidator, useRouteLoaderData } from "react-router";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
 import { useUIStore } from "~/hooks/useUIStore";
-import { useCreateFolder, useFolders } from "~/queries/folders";
-import { useMailbox } from "~/queries/mailboxes";
+import { useCreateFolder } from "~/queries/folders";
+import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
 
 const FOLDER_ICONS: Record<string, React.ReactNode> = {
   [Folders.INBOX]: <TrayIcon size={18} weight="regular" />,
@@ -68,10 +68,14 @@ function FolderLink({ to, icon, label, unreadCount, onClick }: FolderLinkProps) 
 export default function Sidebar() {
   const { mailboxId } = useParams<{ mailboxId: string }>();
   const navigate = useNavigate();
-  const { data: folders = [] } = useFolders(mailboxId);
+  // Folders and the mailbox record come from the `mailbox` route's loader --
+  // the layer that owns the chrome this sidebar is part of.
+  const layout = useRouteLoaderData<MailboxLayoutData>(MAILBOX_ROUTE_ID);
+  const folders = layout?.folders ?? [];
+  const currentMailbox = layout?.mailbox;
   const createFolderMutation = useCreateFolder();
+  const revalidator = useRevalidator();
   const { startCompose, closeSidebar } = useUIStore();
-  const { data: currentMailbox } = useMailbox(mailboxId);
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
 
@@ -88,7 +92,12 @@ export default function Sidebar() {
   const handleCreateFolder = (e: React.FormEvent) => {
     e.preventDefault();
     if (newFolderName.trim() && mailboxId) {
-      createFolderMutation.mutate({ mailboxId, name: newFolderName.trim() });
+      // The folder list is loader-backed now, so refresh the route chain
+      // rather than relying on the mutation's query invalidation.
+      createFolderMutation.mutate(
+        { mailboxId, name: newFolderName.trim() },
+        { onSettled: () => void revalidator.revalidate() },
+      );
       setNewFolderName("");
       setIsCreateFolderOpen(false);
     }

@@ -6,7 +6,8 @@ import { routeAgentRequest } from "agents";
 import { createMcpHandler, type StatelessMcpHandler } from "agents/mcp/server";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
-import { createContext, createRequestHandler, RouterContextProvider } from "react-router";
+import { createRequestHandler, RouterContextProvider } from "react-router";
+import { cloudflareContext } from "../app/context";
 import { app as apiApp, receiveEmail } from "./index";
 import { createEmailMcpServer } from "./mcp";
 import type { Env } from "./types";
@@ -15,16 +16,11 @@ export { MailboxDO } from "./durableObject";
 export { EmailAgent } from "./agent";
 
 /**
- * Router context holding the Worker's environment bindings.
- *
- * React Router v8 makes middleware the default, so loaders, actions and
- * middleware read the load context through `context.get()` rather than from a
- * plain object.
+ * Re-exported for callers that already import it from here. The context itself
+ * lives in `app/context.ts` so route modules can read it in a loader without
+ * importing this file (and with it, the entire Hono app).
  */
-export const cloudflareContext = createContext<{
-  env: Env;
-  ctx: ExecutionContext;
-}>();
+export { cloudflareContext };
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),

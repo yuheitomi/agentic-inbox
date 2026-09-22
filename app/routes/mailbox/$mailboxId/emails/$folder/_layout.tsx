@@ -35,7 +35,7 @@ import { useRevalidateInterval } from "~/hooks/useRevalidateInterval";
 import { useUIStore } from "~/hooks/useUIStore";
 import { getSnippetText } from "~/lib/utils";
 import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
-import { ok, okEmpty, serverApi } from "~/services/api.server";
+import { field, ok, okEmpty, serverApi } from "~/services/api.server";
 import type { Email } from "~/types";
 import type { Route } from "./+types/_layout";
 
@@ -61,12 +61,6 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   );
 
   return { emails, totalCount, page };
-}
-
-/** `FormData.get` widens to `string | File | null`; these fields are always text. */
-function field(form: FormData, key: string): string {
-  const value = form.get(key);
-  return typeof value === "string" ? value : "";
 }
 
 export async function action({ params, request, context }: Route.ActionArgs) {

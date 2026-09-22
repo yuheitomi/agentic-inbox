@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import {
+  href,
   Link,
   redirect,
   useFetcher,
@@ -442,7 +443,10 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
     navigation.state === "loading" && navigation.location?.pathname.includes("/emails/");
   const isPanelOpen = selectedEmailId !== null;
   const search = searchParams.toString() ? `?${searchParams.toString()}` : "";
-  const listPath = `/mailbox/${encodeURIComponent(params.mailboxId)}/emails/${folder}`;
+  const listPath = href("/mailbox/:mailboxId/emails/:folder", {
+    mailboxId: params.mailboxId,
+    folder,
+  });
 
   const setPage = (next: number) => {
     setSearchParams(

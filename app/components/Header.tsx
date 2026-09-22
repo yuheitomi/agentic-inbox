@@ -11,13 +11,14 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { type KeyboardEvent, useEffect, useState } from "react";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { href, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { Folders } from "shared/folders";
 import { useUIStore } from "~/hooks/useUIStore";
 
 export default function Header() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
-  const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { mailboxId = "" } = useParams<{ mailboxId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -34,7 +35,8 @@ export default function Header() {
   const performSearch = () => {
     if (mailboxId && searchQuery.trim()) {
       const q = searchQuery.trim();
-      void navigate(`/mailbox/${mailboxId}/search?q=${encodeURIComponent(q)}`);
+      const path = href("/mailbox/:mailboxId/search", { mailboxId });
+      void navigate(`${path}?q=${encodeURIComponent(q)}`);
       setIsSearchExpanded(false);
     }
   };
@@ -42,7 +44,9 @@ export default function Header() {
   const clearSearch = () => {
     setSearchQuery("");
     if (location.pathname.includes("/search") && mailboxId) {
-      void navigate(`/mailbox/${mailboxId}/emails/inbox`);
+      void navigate(
+        href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX }),
+      );
     }
   };
 
@@ -147,8 +151,8 @@ export default function Header() {
             onClick={() =>
               navigate(
                 isSettingsActive
-                  ? `/mailbox/${mailboxId}/emails/inbox`
-                  : `/mailbox/${mailboxId}/settings`,
+                  ? href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX })
+                  : href("/mailbox/:mailboxId/settings", { mailboxId }),
               )
             }
             aria-label="Settings"

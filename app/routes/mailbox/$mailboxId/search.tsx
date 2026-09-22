@@ -5,7 +5,8 @@
 import { Badge, Button, Loader, Pagination, Tooltip } from "@cloudflare/kumo";
 import { ArrowLeftIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { href, useNavigate, useParams, useSearchParams } from "react-router";
+import { Folders } from "shared/folders";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import { useUIStore } from "~/hooks/useUIStore";
 import { formatListDate, getSnippetText } from "~/lib/utils";
@@ -43,14 +44,14 @@ function highlightTerms(text: string, query: string): React.ReactNode {
 }
 
 export default function SearchResultsRoute() {
-  const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { mailboxId = "" } = useParams<{ mailboxId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { selectedEmailId, isComposing, selectEmail, closePanel } = useUIStore();
   const updateEmail = useUpdateEmail();
   const urlQuery = searchParams.get("q") || "";
   const [page, setPage] = useState(1);
-  const searchKey = useMemo(() => `${mailboxId ?? ""}::${urlQuery}`, [mailboxId, urlQuery]);
+  const searchKey = useMemo(() => `${mailboxId}::${urlQuery}`, [mailboxId, urlQuery]);
   const prevSearchKeyRef = useRef(searchKey);
   const searchChanged = prevSearchKeyRef.current !== searchKey;
   const currentPage = searchChanged ? 1 : page;
@@ -97,7 +98,11 @@ export default function SearchResultsRoute() {
               shape="square"
               size="sm"
               icon={<ArrowLeftIcon size={18} />}
-              onClick={() => navigate(`/mailbox/${mailboxId}/emails/inbox`)}
+              onClick={() =>
+                navigate(
+                  href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX }),
+                )
+              }
               aria-label="Back to inbox"
             />
           </Tooltip>

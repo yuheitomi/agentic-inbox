@@ -15,7 +15,14 @@ import {
   TrayIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
-import { NavLink, useNavigate, useParams, useRevalidator, useRouteLoaderData } from "react-router";
+import {
+  href,
+  NavLink,
+  useNavigate,
+  useParams,
+  useRevalidator,
+  useRouteLoaderData,
+} from "react-router";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
 import { useUIStore } from "~/hooks/useUIStore";
 import { useCreateFolder } from "~/queries/folders";
@@ -66,7 +73,7 @@ function FolderLink({ to, icon, label, unreadCount, onClick }: FolderLinkProps) 
 }
 
 export default function Sidebar() {
-  const { mailboxId } = useParams<{ mailboxId: string }>();
+  const { mailboxId = "" } = useParams<{ mailboxId: string }>();
   const navigate = useNavigate();
   // Folders and the mailbox record come from the `mailbox` route's loader --
   // the layer that owns the chrome this sidebar is part of.
@@ -104,7 +111,7 @@ export default function Sidebar() {
   };
 
   const displayName = useMemo(() => {
-    if (!currentMailbox) return mailboxId?.split("@")[0] || "Mailbox";
+    if (!currentMailbox) return mailboxId.split("@")[0] || "Mailbox";
     // Prefer settings.fromName > name > local part of email
     if (currentMailbox.settings?.fromName) {
       return currentMailbox.settings.fromName;
@@ -160,7 +167,7 @@ export default function Sidebar() {
         {SYSTEM_FOLDER_LINKS.map((folder) => (
           <FolderLink
             key={folder.id}
-            to={`/mailbox/${mailboxId}/emails/${folder.id}`}
+            to={href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: folder.id })}
             icon={FOLDER_ICONS[folder.id]}
             label={folder.label}
             unreadCount={getUnreadCount(folder.id)}
@@ -189,7 +196,7 @@ export default function Sidebar() {
             {customFolders.map((folder) => (
               <FolderLink
                 key={folder.id}
-                to={`/mailbox/${mailboxId}/emails/${folder.id}`}
+                to={href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: folder.id })}
                 icon={<FolderIcon size={18} />}
                 label={folder.name}
                 unreadCount={folder.unreadCount}

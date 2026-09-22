@@ -5,7 +5,7 @@
 import { Button, Dialog, Input, Select, Text, useKumoToastManager } from "@cloudflare/kumo";
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link as RouterLink, useFetcher } from "react-router";
+import { href, Link as RouterLink, useFetcher } from "react-router";
 import { errorMessage, field, ok, serverApi } from "~/services/api.server";
 import type { Route } from "./+types/index";
 
@@ -219,7 +219,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
             {accounts.map((account, idx) => (
               <RouterLink
                 key={account.id}
-                to={`/mailbox/${account.id}`}
+                to={href("/mailbox/:mailboxId", { mailboxId: account.id })}
                 className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-kumo-tint ${
                   idx > 0 ? "border-t border-kumo-line" : ""
                 }`}

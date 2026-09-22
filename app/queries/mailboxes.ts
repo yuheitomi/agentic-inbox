@@ -21,7 +21,6 @@ export function useUpdateMailbox() {
       api.updateMailbox(mailboxId, settings),
     onSuccess: (_data, { mailboxId }) => {
       void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.detail(mailboxId) });
-      void qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
     },
   });
 }

@@ -111,18 +111,10 @@ export type {
 // ---------- API client ----------
 
 const api = {
-  // Config
-  getConfig: () => json(v1.config.$get()),
-
   // Mailboxes
-  listMailboxes: () => json(mailboxes.$get()),
-  createMailbox: (email: string, name: string, settings?: MailboxSettings) =>
-    json(mailboxes.$post({ json: { email, name, settings } })),
   getMailbox: (mailboxId: string) => json(mailboxes[":mailboxId"].$get({ param: { mailboxId } })),
   updateMailbox: (mailboxId: string, settings: MailboxSettings) =>
     json(mailboxes[":mailboxId"].$put({ param: { mailboxId }, json: { settings } })),
-  deleteMailbox: (mailboxId: string) =>
-    empty(mailboxes[":mailboxId"].$delete({ param: { mailboxId } })),
 
   // Emails
   listEmails: (mailboxId: string, query: ListEmailsQuery, opts?: { signal?: AbortSignal }) =>

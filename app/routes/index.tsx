@@ -6,31 +6,11 @@ import { Button, Dialog, Input, Select, Text, useKumoToastManager } from "@cloud
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link as RouterLink, useFetcher } from "react-router";
-import { ok, serverApi } from "~/services/api.server";
+import { errorMessage, field, ok, serverApi } from "~/services/api.server";
 import type { Route } from "./+types/index";
 
 export function meta() {
   return [{ title: "Agentic Inbox" }];
-}
-
-/** `FormData.get` widens to `string | File | null`; these fields are always text. */
-function field(form: FormData, key: string): string {
-  const value = form.get(key);
-  return typeof value === "string" ? value : "";
-}
-
-type JsonResponse = {
-  ok: boolean;
-  status: number;
-  json(): Promise<unknown>;
-};
-
-async function actionError(res: JsonResponse, fallback: string): Promise<string> {
-  const body = await res.json().catch(() => null);
-  if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-    return body.error;
-  }
-  return fallback;
 }
 
 type ActionData = { ok: true } | { ok: false; error: string };
@@ -61,26 +41,26 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Ac
   const intent = field(form, "intent");
 
   switch (intent) {
-    case "_create": {
+    case "create": {
       const email = field(form, "email");
       const name = field(form, "name");
       const res = await api.mailboxes.$post({ json: { email, name } });
       if (!res.ok) {
-        return { ok: false, error: await actionError(res, "Failed to create mailbox") };
+        return { ok: false, error: await errorMessage(res, "Failed to create mailbox") };
       }
       return { ok: true };
     }
 
-    case "_delete": {
+    case "delete": {
       const mailboxId = field(form, "mailboxId");
       const res = await api.mailboxes[":mailboxId"].$delete({ param: { mailboxId } });
       if (!res.ok) {
-        return { ok: false, error: await actionError(res, "Failed to delete mailbox") };
+        return { ok: false, error: await errorMessage(res, "Failed to delete mailbox") };
       }
       return { ok: true };
     }
 
-    case "_ensure": {
+    case "ensure": {
       const [listed, config] = await Promise.all([ok(api.mailboxes.$get()), ok(api.config.$get())]);
       const existing = new Set(listed.map((mailbox) => mailbox.email.toLowerCase()));
       const missing = config.emailAddresses.filter((addr) => !existing.has(addr.toLowerCase()));
@@ -92,7 +72,7 @@ export async function action({ request, context }: Route.ActionArgs): Promise<Ac
           const res = await api.mailboxes.$post({ json: { email: addr, name } });
           // A second ensure can lose the race to the first; the mailbox exists.
           if (res.ok || res.status === 409) return;
-          failures.push(await actionError(res, "Failed to create mailbox"));
+          failures.push(await errorMessage(res, "Failed to create mailbox"));
         }),
       );
 
@@ -115,7 +95,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newPrefix, setNewPrefix] = useState("");
-  const [selectedDomain, setSelectedDomain] = useState(domains[0] ?? "");
+  const [selectedDomain, setSelectedDomain] = useState("");
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -123,6 +103,10 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
     id: string;
     email: string;
   } | null>(null);
+
+  // Derived rather than seeded into state: `domains` comes from the loader and
+  // can change under a revalidation, which a `useState` initialiser never sees.
+  const domain = domains.includes(selectedDomain) ? selectedDomain : (domains[0] ?? "");
 
   const handledCreate = useRef<typeof createFetcher.data>(undefined);
   const handledDelete = useRef<typeof deleteFetcher.data>(undefined);
@@ -157,6 +141,20 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
     toastManager.add({ title: result.error, variant: "error" });
   }, [deleteFetcher.state, deleteFetcher.data, toastManager]);
 
+  // Auto-creation runs without anyone watching, so a failure has to announce
+  // itself: the addresses are listed from config either way, and their
+  // mailboxes would 404 on the way in.
+  const handledEnsure = useRef<typeof ensureFetcher.data>(undefined);
+  useEffect(() => {
+    if (ensureFetcher.state !== "idle") return;
+    const result = ensureFetcher.data;
+    if (!result || result === handledEnsure.current) return;
+    handledEnsure.current = result;
+    if (!result.ok) {
+      toastManager.add({ title: result.error, variant: "error" });
+    }
+  }, [ensureFetcher.state, ensureFetcher.data, toastManager]);
+
   // Configured addresses that have no mailbox yet are created once. The
   // action revalidates this loader, so the list updates without a refetch.
   const autoCreateDone = useRef(false);
@@ -169,14 +167,14 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
     if (!missing) return;
 
     const form = new FormData();
-    form.set("intent", "_ensure");
+    form.set("intent", "ensure");
     void ensureFetcher.submit(form, { method: "post" });
     // `ensureFetcher` is stable per fetcher; re-running on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emailAddresses, mailboxes]);
 
   const handleCreate = (event: FormEvent) => {
-    if (!newPrefix || !selectedDomain) {
+    if (!newPrefix || !domain) {
       event.preventDefault();
       setCreateError("Please fill in all fields");
       return;
@@ -292,11 +290,11 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
         <Dialog size="sm" className="p-6">
           <Dialog.Title className="text-base font-semibold mb-5">Create New Mailbox</Dialog.Title>
           <createFetcher.Form method="post" onSubmit={handleCreate} className="space-y-4">
-            <input type="hidden" name="intent" value="_create" />
+            <input type="hidden" name="intent" value="create" />
             <input
               type="hidden"
               name="email"
-              value={newPrefix && selectedDomain ? `${newPrefix}@${selectedDomain}` : ""}
+              value={newPrefix && domain ? `${newPrefix}@${domain}` : ""}
             />
             <input type="hidden" name="name" value={newName || newPrefix} />
             {createError && (
@@ -324,7 +322,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
                   <div className="flex-1">
                     <Select
                       aria-label="Domain"
-                      value={selectedDomain}
+                      value={domain}
                       onValueChange={(value) => {
                         if (value) setSelectedDomain(value);
                       }}
@@ -337,7 +335,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
                     </Select>
                   </div>
                 ) : (
-                  <span className="text-sm text-kumo-subtle">{selectedDomain || "no domain"}</span>
+                  <span className="text-sm text-kumo-subtle">{domain || "no domain"}</span>
                 )}
               </div>
             </div>
@@ -361,7 +359,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
                 variant="primary"
                 size="sm"
                 loading={isCreating}
-                disabled={!selectedDomain}
+                disabled={!domain}
               >
                 Create
               </Button>
@@ -385,7 +383,7 @@ export default function HomeRoute({ loaderData }: Route.ComponentProps) {
             cannot be undone.
           </Dialog.Description>
           <deleteFetcher.Form method="post" className="flex justify-end gap-2">
-            <input type="hidden" name="intent" value="_delete" />
+            <input type="hidden" name="intent" value="delete" />
             <input type="hidden" name="mailboxId" value={mailboxToDelete?.id ?? ""} />
             <Dialog.Close
               render={(props) => (

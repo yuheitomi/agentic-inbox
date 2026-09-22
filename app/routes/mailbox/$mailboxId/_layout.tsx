@@ -10,27 +10,17 @@ import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useUIStore } from "~/hooks/useUIStore";
 import { ok, serverApi } from "~/services/api.server";
-import type { Folder, Mailbox } from "~/types";
 import type { Route } from "./+types/_layout";
 
-/** Route id for `useRouteLoaderData` in descendants. */
+/** Route id descendants pass to `useRoute` to read this loader's data. */
 export const MAILBOX_ROUTE_ID = "routes/mailbox/$mailboxId/_layout";
-
-export interface MailboxLayoutData {
-  mailbox: Mailbox;
-  folders: Folder[];
-}
 
 /**
  * Loads the mailbox record and its folder list -- the data the sidebar needs.
  * Both calls go through the in-process RPC client, so they hit the Hono app
  * without leaving the isolate.
  */
-export async function loader({
-  params,
-  request,
-  context,
-}: Route.LoaderArgs): Promise<MailboxLayoutData> {
+export async function loader({ params, request, context }: Route.LoaderArgs) {
   const mailboxId = decodeURIComponent(params.mailboxId);
   const api = serverApi(context, request);
   const param = { mailboxId };

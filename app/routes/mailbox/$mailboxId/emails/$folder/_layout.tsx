@@ -24,8 +24,8 @@ import {
   useFetcher,
   useMatches,
   useNavigation,
+  unstable_useRoute as useRoute,
   useRevalidator,
-  useRouteLoaderData,
   useSearchParams,
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
@@ -35,7 +35,7 @@ import MailboxSplitView from "~/components/MailboxSplitView";
 import { useRevalidateInterval } from "~/hooks/useRevalidateInterval";
 import { useUIStore } from "~/hooks/useUIStore";
 import { getSnippetText } from "~/lib/utils";
-import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
+import { MAILBOX_ROUTE_ID } from "~/routes/mailbox/$mailboxId/_layout";
 import { field, ok, okEmpty, serverApi } from "~/services/api.server";
 import type { Email } from "~/types";
 import type { Route } from "./+types/_layout";
@@ -431,7 +431,7 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
         | undefined
     )?.emailId ?? null;
 
-  const folders = useRouteLoaderData<MailboxLayoutData>(MAILBOX_ROUTE_ID)?.folders ?? [];
+  const folders = useRoute(MAILBOX_ROUTE_ID)?.loaderData?.folders ?? [];
   const folderName = useMemo(() => {
     const found = folders.find((f) => f.id === folder);
     if (found) return found.name;

@@ -3,9 +3,15 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { useEffect, useRef } from "react";
-import { href, useFetcher, useNavigate, useRouteLoaderData, useSearchParams } from "react-router";
+import {
+  href,
+  unstable_useRoute as useRoute,
+  useFetcher,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import EmailPanel from "~/components/EmailPanel";
-import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
+import { MAILBOX_ROUTE_ID } from "~/routes/mailbox/$mailboxId/_layout";
 import { ok, serverApi } from "~/services/api.server";
 import type { Route } from "./+types/$emailId";
 
@@ -39,7 +45,7 @@ export default function EmailDetailRoute({ loaderData, params }: Route.Component
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const markRead = useFetcher();
-  const layout = useRouteLoaderData<MailboxLayoutData>(MAILBOX_ROUTE_ID);
+  const layout = useRoute(MAILBOX_ROUTE_ID)?.loaderData;
 
   const listPath = href("/mailbox/:mailboxId/emails/:folder", {
     mailboxId: params.mailboxId,

@@ -18,15 +18,15 @@ import { useMemo, useState } from "react";
 import {
   href,
   NavLink,
+  unstable_useRoute as useRoute,
   useNavigate,
   useParams,
   useRevalidator,
-  useRouteLoaderData,
 } from "react-router";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
 import { useUIStore } from "~/hooks/useUIStore";
 import { useCreateFolder } from "~/queries/folders";
-import { MAILBOX_ROUTE_ID, type MailboxLayoutData } from "~/routes/mailbox/$mailboxId/_layout";
+import { MAILBOX_ROUTE_ID } from "~/routes/mailbox/$mailboxId/_layout";
 
 const FOLDER_ICONS: Record<string, React.ReactNode> = {
   [Folders.INBOX]: <TrayIcon size={18} weight="regular" />,
@@ -77,7 +77,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   // Folders and the mailbox record come from the `mailbox` route's loader --
   // the layer that owns the chrome this sidebar is part of.
-  const layout = useRouteLoaderData<MailboxLayoutData>(MAILBOX_ROUTE_ID);
+  const layout = useRoute(MAILBOX_ROUTE_ID)?.loaderData;
   const folders = layout?.folders ?? [];
   const currentMailbox = layout?.mailbox;
   const createFolderMutation = useCreateFolder();

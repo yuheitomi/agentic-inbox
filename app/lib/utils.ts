@@ -48,23 +48,24 @@ export function toEmailListValue(addresses: string[]): string | string[] | undef
 }
 
 /**
- * Convert HTML content to plain text.
- * Uses DOM APIs so must only be called client-side.
+ * Convert HTML content to plain text for an email's `text` part.
+ *
+ * String-based rather than DOM-based so it runs in the Worker, where actions
+ * build the outgoing message. Block boundaries become line breaks, style
+ * blocks and tags are dropped, and entities are decoded.
  */
 export function htmlToPlainText(html: string): string {
-  // Sanitize with DOMPurify before DOM parsing to prevent XSS during innerHTML assignment.
-  // DOMPurify strips all dangerous content (scripts, event handlers, etc.)
-  // while preserving structural HTML for text extraction.
-  const sanitized = DOMPurify.sanitize(html);
-  const div = document.createElement("div");
-  div.innerHTML = sanitized
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<p[^>]*>/gi, "")
-    .replace(/<div[^>]*>/gi, "")
-    .replace(/<\/div>/gi, "\n");
-  return (div.textContent || div.innerText || "").trim();
+  return decodeHtmlEntities(
+    html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n\n")
+      .replace(/<\/div>/gi, "\n")
+      .replace(/<[^>]*>/g, ""),
+  )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**

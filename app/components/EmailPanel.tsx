@@ -2,26 +2,24 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { useKumoToastManager } from "@cloudflare/kumo";
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRevalidator } from "react-router";
+import { useFetcher, useLocation, useNavigate } from "react-router";
 import { Folders } from "shared/folders";
 import EmailPanelDialogs from "~/components/email-panel/EmailPanelDialogs";
 import EmailPanelHeader from "~/components/email-panel/EmailPanelHeader";
 import EmailPanelToolbar from "~/components/email-panel/EmailPanelToolbar";
 import SingleMessageView from "~/components/email-panel/SingleMessageView";
 import ThreadMessage from "~/components/email-panel/ThreadMessage";
-import { useUIStore } from "~/hooks/useUIStore";
-import { splitEmailList, toEmailListValue } from "~/lib/utils";
-import {
-  useDeleteEmail,
-  useMoveEmail,
-  useReplyToEmail,
-  useSendEmail,
-  useUpdateEmail,
-} from "~/queries/emails";
-import api from "~/services/api";
+import { useSubmissionToast } from "~/hooks/useSubmissionToast";
+import { type ComposeParams, withCompose } from "~/lib/compose";
 import type { Email, Folder, Mailbox } from "~/types";
+
+/**
+ * Fetcher key for the pane's mutations that can close it (move, delete,
+ * sending or discarding a draft). The mailbox layout watches the same key to
+ * report the outcome after the pane has gone.
+ */
+export const EMAIL_PANEL_FETCHER_KEY = "email-panel";
 
 export function EmailPanelSkeleton() {
   return (
@@ -49,48 +47,47 @@ export interface EmailPanelProps {
   /** Every message in the thread, including `email` itself. */
   thread: Email[];
   folders: Folder[];
-  mailbox?: Mailbox;
-  onClose: () => void;
+  mailbox: Mailbox;
+  /** The folder the email is being viewed from; drafts get draft actions. */
+  folder: string;
+  /** The list the pane was opened from, which closing it returns to. */
+  listHref: string;
 }
 
 /**
- * Presentational reading pane. Its data arrives as props -- from the
- * `email-detail` route loader on the list path, or from `EmailPanelQuery` on
- * the search path, which still fetches client-side.
+ * The reading pane. Its data arrives as props from a route loader, and every
+ * mutation posts to that route's action: the pane never fetches or caches.
  */
-export default function EmailPanel({ email, thread, folders, mailbox, onClose }: EmailPanelProps) {
-  const { mailboxId, folder } = useParams<{ mailboxId: string; folder: string }>();
+export default function EmailPanel({
+  email,
+  thread,
+  folders,
+  mailbox,
+  folder,
+  listHref,
+}: EmailPanelProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const emailId = email.id;
-  const currentMailbox = mailbox;
-  const threadRepliesRaw = thread;
-  const revalidator = useRevalidator();
-  const updateEmail = useUpdateEmail();
-  const deleteEmailMut = useDeleteEmail();
-  const moveEmailMut = useMoveEmail();
-  const sendEmailMut = useSendEmail();
-  const replyMut = useReplyToEmail();
-  const { startCompose } = useUIStore();
 
-  /**
-   * These mutations still go through TanStack Query, whose invalidation no
-   * longer backs the loader-driven list and sidebar. Revalidating the route
-   * chain keeps both in sync until the remaining mutations move to actions.
-   */
-  const closePanel = () => {
-    void revalidator.revalidate();
-    onClose();
-  };
-  const toastManager = useKumoToastManager();
-  const [isSending, setIsSending] = useState(false);
+  // Star and read toggles keep the pane open, so they use a fetcher of their
+  // own whose pending submission doubles as optimistic state.
+  const toggles = useFetcher();
+  useSubmissionToast(toggles, {});
+  const panel = useFetcher({ key: EMAIL_PANEL_FETCHER_KEY });
+
+  const pendingToggle = toggles.formData?.get("intent");
+  const starred =
+    pendingToggle === "star" ? toggles.formData?.get("starred") === "true" : email.starred;
+  const read = pendingToggle === "read" ? toggles.formData?.get("read") === "true" : email.read;
+  const isSending = panel.state !== "idle" && panel.formData?.get("intent") === "sendDraft";
+
   const [sourceViewEmail, setSourceViewEmail] = useState<Email | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
   const isDraftFolder = folder === Folders.DRAFT;
 
-  const threadReplies = useMemo(() => {
-    if (!threadRepliesRaw) return [];
-    return threadRepliesRaw.filter((e) => e.id !== email.id);
-  }, [threadRepliesRaw, email]);
+  const threadReplies = useMemo(() => thread.filter((e) => e.id !== email.id), [thread, email]);
 
   const allMessages = useMemo(() => {
     return [email, ...threadReplies].sort(
@@ -98,8 +95,8 @@ export default function EmailPanel({ email, thread, folders, mailbox, onClose }:
     );
   }, [email, threadReplies]);
 
-  // Reset expanded state only when the selected email changes, not on every refetch.
-  // Using allMessages as a dependency would reset user expand/collapse state on background refetches.
+  // Reset expanded state only when the selected email changes, not on every revalidation.
+  // Using allMessages as a dependency would reset user expand/collapse state on background polls.
   const currentEmailId = email.id;
   useEffect(() => {
     if (allMessages.length > 1) setExpandedMessages(new Set([allMessages[0].id]));
@@ -124,116 +121,49 @@ export default function EmailPanel({ email, thread, folders, mailbox, onClose }:
   }, [allMessages, isDraftFolder, emailId]);
 
   const lastReceivedMessage = useMemo(() => {
-    const ce = currentMailbox?.email;
-    const received = allMessages.filter((msg) => !draftMessageIds.has(msg.id) && msg.sender !== ce);
+    const own = mailbox.email;
+    const received = allMessages.filter(
+      (msg) => !draftMessageIds.has(msg.id) && msg.sender !== own,
+    );
     if (received.length > 0) return received[0];
     const nonDrafts = allMessages.filter((msg) => !draftMessageIds.has(msg.id));
     return nonDrafts.length > 0 ? nonDrafts[0] : email;
-  }, [allMessages, draftMessageIds, currentMailbox?.email, email]);
+  }, [allMessages, draftMessageIds, mailbox.email, email]);
 
   const moveToFolders = useMemo(() => {
     const cur = folder || email.folder_id;
     return folders.filter((f) => f.id !== cur);
   }, [folders, folder, email.folder_id]);
 
-  const toggleStar = () => {
-    if (!mailboxId) return;
-    updateEmail.mutate(
-      { mailboxId, id: email.id, data: { starred: !email.starred } },
-      { onSettled: () => void revalidator.revalidate() },
-    );
+  /** This page with the composer opened as `params`, keeping the email in view. */
+  const composeHref = (params: ComposeParams) =>
+    `${location.pathname}${withCompose(location.search, params)}`;
+
+  /**
+   * Post a pane mutation. `closes` sends `redirectTo`, so the action lands on
+   * the list once the email is gone from this view.
+   */
+  const submit = (fields: Record<string, string>, closes: boolean) => {
+    void panel.submit(closes ? { ...fields, redirectTo: listHref } : fields, { method: "post" });
   };
-  const handleMove = (folderId: string) => {
-    if (mailboxId) {
-      moveEmailMut.mutate({ mailboxId, id: email.id, folderId });
-      closePanel();
-    }
+
+  const toggle = (fields: Record<string, string>) => {
+    void toggles.submit(fields, { method: "post" });
   };
+
   const handleDelete = () => {
-    if (mailboxId) {
-      if (!window.confirm("Are you sure you want to delete this email?")) return;
-      deleteEmailMut.mutate({ mailboxId, id: email.id });
-      closePanel();
-    }
+    if (!window.confirm("Are you sure you want to delete this email?")) return;
+    submit({ intent: "delete", emailId }, true);
   };
 
-  const handleEditDraft = (draftMsg?: Email) => {
-    const target = draftMsg || email;
-    if (target.in_reply_to) {
-      startCompose({
-        mode: "reply",
-        originalEmail: allMessages.find((msg) => msg.id === target.in_reply_to),
-        draftEmail: target,
-      });
-    } else {
-      startCompose({ mode: "new", originalEmail: undefined, draftEmail: target });
-    }
-  };
-
-  const handleDeleteDraft = async (draftMsg?: Email) => {
-    const target = draftMsg || email;
-    if (!mailboxId) return;
+  const handleDeleteDraft = (target: Email) => {
     if (!window.confirm("Discard this draft?")) return;
-    deleteEmailMut.mutate({ mailboxId, id: target.id });
-    toastManager.add({ title: "Draft discarded" });
-    if (target.id === emailId) closePanel();
+    submit({ intent: "discardDraft", emailId: target.id }, target.id === emailId);
   };
 
-  const handleSendDraft = async (draftMsg?: Email) => {
-    let target = draftMsg || email;
-    if (!mailboxId || !currentMailbox) return;
-    setIsSending(true);
-    try {
-      if (!target.recipient || !target.subject) {
-        try {
-          const fresh = (await api.getEmail(mailboxId, target.id)) as Email;
-          if (fresh) target = fresh;
-        } catch {}
-      }
-      if (!target.recipient) {
-        toastManager.add({
-          title: "Cannot send: no recipient set on this draft.",
-          variant: "error",
-        });
-        return;
-      }
-      const to = toEmailListValue(splitEmailList(target.recipient));
-      if (to === undefined) {
-        toastManager.add({
-          title: "Cannot send: no valid recipient set on this draft.",
-          variant: "error",
-        });
-        return;
-      }
-      const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
-      const from =
-        fromName && fromName !== currentMailbox.email
-          ? { email: currentMailbox.email, name: fromName }
-          : currentMailbox.email;
-      const originalEmail = target.in_reply_to
-        ? allMessages.find((msg) => msg.id === target.in_reply_to)
-        : undefined;
-      const emailData = {
-        to,
-        cc: toEmailListValue(splitEmailList(target.cc)),
-        bcc: toEmailListValue(splitEmailList(target.bcc)),
-        from,
-        subject: target.subject || "(no subject)",
-        html: target.body || "",
-        text: target.body ? target.body.replace(/<[^>]*>/g, "").trim() : "",
-      };
-      if (originalEmail)
-        await replyMut.mutateAsync({ mailboxId, emailId: originalEmail.id, email: emailData });
-      else await sendEmailMut.mutateAsync({ mailboxId, email: emailData });
-      await deleteEmailMut.mutateAsync({ mailboxId, id: target.id });
-      toastManager.add({ title: "Email sent!" });
-      if (isDraftFolder) closePanel();
-    } catch (err) {
-      const message = (err instanceof Error ? err.message : null) || "Failed to send email.";
-      toastManager.add({ title: message, variant: "error" });
-    } finally {
-      setIsSending(false);
-    }
+  // The action re-reads the stored draft and builds the message on the server.
+  const handleSendDraft = (target: Email) => {
+    submit({ intent: "sendDraft", emailId: target.id }, isDraftFolder && target.id === emailId);
   };
 
   const hasThread = allMessages.length > 1;
@@ -241,30 +171,19 @@ export default function EmailPanel({ email, thread, folders, mailbox, onClose }:
   return (
     <div className="flex flex-col h-full">
       <EmailPanelToolbar
-        email={email}
+        email={{ ...email, starred, read }}
         isDraftFolder={isDraftFolder}
         isSending={isSending}
         moveToFolders={moveToFolders}
-        onBack={onClose}
-        onSendDraft={() => handleSendDraft()}
-        onEditDraft={() => handleEditDraft()}
-        onReply={() => startCompose({ mode: "reply", originalEmail: lastReceivedMessage })}
-        onReplyAll={() =>
-          startCompose({
-            mode: "reply-all",
-            originalEmail: lastReceivedMessage,
-          })
-        }
-        onForward={() => startCompose({ mode: "forward", originalEmail: email })}
-        onToggleStar={toggleStar}
-        onToggleRead={() => {
-          if (!mailboxId) return;
-          updateEmail.mutate(
-            { mailboxId, id: email.id, data: { read: !email.read } },
-            { onSettled: () => void revalidator.revalidate() },
-          );
-        }}
-        onMove={handleMove}
+        backHref={listHref}
+        editDraftHref={composeHref({ mode: "draft", draft: emailId })}
+        replyHref={composeHref({ mode: "reply", original: lastReceivedMessage.id })}
+        replyAllHref={composeHref({ mode: "reply-all", original: lastReceivedMessage.id })}
+        forwardHref={composeHref({ mode: "forward", original: emailId })}
+        onSendDraft={() => handleSendDraft(email)}
+        onToggleStar={() => toggle({ intent: "star", emailId, starred: String(!starred) })}
+        onToggleRead={() => toggle({ intent: "read", emailId, read: String(!read) })}
+        onMove={(folderId) => submit({ intent: "move", emailId, folderId }, true)}
         onViewSource={() => setSourceViewEmail(email)}
         onDelete={handleDelete}
       />
@@ -283,15 +202,19 @@ export default function EmailPanel({ email, thread, folders, mailbox, onClose }:
               <ThreadMessage
                 key={msg.id}
                 email={msg}
-                mailboxId={mailboxId}
-                mailboxEmail={currentMailbox?.email}
+                mailboxId={mailbox.id}
+                mailboxEmail={mailbox.email}
                 isLast={idx === allMessages.length - 1}
                 isDraft={isDraft}
                 isSending={isDraft ? isSending : false}
                 isExpanded={expandedMessages.has(msg.id)}
                 onToggleExpand={() => toggleExpand(msg.id)}
                 onSendDraft={isDraft ? () => handleSendDraft(msg) : undefined}
-                onEditDraft={isDraft ? () => handleEditDraft(msg) : undefined}
+                onEditDraft={
+                  isDraft
+                    ? () => void navigate(composeHref({ mode: "draft", draft: msg.id }))
+                    : undefined
+                }
                 onDeleteDraft={isDraft ? () => handleDeleteDraft(msg) : undefined}
                 onViewSource={() => setSourceViewEmail(msg)}
                 onPreviewImage={(url, filename) => setPreviewImage({ url, filename })}
@@ -301,7 +224,7 @@ export default function EmailPanel({ email, thread, folders, mailbox, onClose }:
         ) : (
           <SingleMessageView
             email={email}
-            mailboxId={mailboxId}
+            mailboxId={mailbox.id}
             onPreviewImage={(url, filename) => setPreviewImage({ url, filename })}
           />
         )}

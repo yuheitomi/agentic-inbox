@@ -10,17 +10,16 @@ import { serverApi } from "~/services/api.server";
 import { emailAction, loadEmailDetail } from "~/services/mail.server";
 import type { Route } from "./+types/$emailId";
 
+/** The same reading pane as a folder's, opened from a search result. */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   return loadEmailDetail(serverApi(context, request), params.mailboxId, params.emailId);
 }
 
-/** Star, read state, move, delete, and draft sends -- from the pane and the list rows alike. */
 export async function action({ params, request, context }: Route.ActionArgs) {
   const form = await request.formData();
   return emailAction(serverApi(context, request), params.mailboxId, params.emailId, form);
 }
 
-/** Paging the list or opening the composer leaves the open email as it was. */
 export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
   return revalidateOn(args, { params: ["mailboxId", "emailId"] });
 }
@@ -30,29 +29,24 @@ export function meta({ loaderData }: Route.MetaArgs) {
   return [{ title: `${subject} — Agentic Inbox` }];
 }
 
-export default function FolderEmailRoute({ loaderData, params }: Route.ComponentProps) {
+export default function SearchEmailRoute({ loaderData, params }: Route.ComponentProps) {
+  const { email, thread } = loaderData;
   return (
     <EmailDetail
-      email={loaderData.email}
-      thread={loaderData.thread}
-      folder={params.folder}
-      listPath={href("/mailbox/:mailboxId/emails/:folder", {
-        mailboxId: params.mailboxId,
-        folder: params.folder,
-      })}
+      email={email}
+      thread={thread}
+      // Results span folders, so the email's own folder decides its actions.
+      folder={email.folder_id ?? ""}
+      listPath={href("/mailbox/:mailboxId/search", { mailboxId: params.mailboxId })}
     />
   );
 }
 
-/** A missing email closes just the pane; the list and sidebar stay. */
 export function ErrorBoundary({ error, params }: Route.ErrorBoundaryProps) {
   return (
     <EmailDetailError
       error={error}
-      listPath={href("/mailbox/:mailboxId/emails/:folder", {
-        mailboxId: params.mailboxId,
-        folder: params.folder,
-      })}
+      listPath={href("/mailbox/:mailboxId/search", { mailboxId: params.mailboxId })}
     />
   );
 }

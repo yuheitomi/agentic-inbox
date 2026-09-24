@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Tooltip } from "@cloudflare/kumo";
+import { Button, LinkButton, Tooltip } from "@cloudflare/kumo";
 import {
   ArrowBendUpLeftIcon,
   ArrowBendUpRightIcon,
@@ -26,13 +26,13 @@ interface EmailPanelToolbarProps {
   isDraftFolder: boolean;
   isSending: boolean;
   moveToFolders: Folder[];
-  lastReceivedMessage?: Email;
-  onBack: () => void;
+  /** Where closing the pane goes: the list it was opened from. */
+  backHref: string;
+  editDraftHref: string;
+  replyHref: string;
+  replyAllHref: string;
+  forwardHref: string;
   onSendDraft: () => void;
-  onEditDraft: () => void;
-  onReply: () => void;
-  onReplyAll: () => void;
-  onForward: () => void;
   onToggleStar: () => void;
   onToggleRead: () => void;
   onMove: (folderId: string) => void;
@@ -45,12 +45,12 @@ export default function EmailPanelToolbar({
   isDraftFolder,
   isSending,
   moveToFolders,
-  onBack,
+  backHref,
+  editDraftHref,
+  replyHref,
+  replyAllHref,
+  forwardHref,
   onSendDraft,
-  onEditDraft,
-  onReply,
-  onReplyAll,
-  onForward,
   onToggleStar,
   onToggleRead,
   onMove,
@@ -59,12 +59,12 @@ export default function EmailPanelToolbar({
 }: EmailPanelToolbarProps) {
   return (
     <div className="flex items-center gap-1 px-3 py-2 border-b border-kumo-line shrink-0 md:px-4">
-      <Button
+      <LinkButton
+        href={backHref}
         variant="ghost"
         shape="square"
         size="sm"
         icon={<ArrowLeftIcon size={18} />}
-        onClick={onBack}
         aria-label="Back to list"
         className="md:hidden shrink-0"
       />
@@ -80,44 +80,44 @@ export default function EmailPanelToolbar({
           >
             {isSending ? "Sending..." : "Send"}
           </Button>
-          <Button
+          <LinkButton
+            href={editDraftHref}
             variant="secondary"
             size="sm"
             icon={<PencilSimpleIcon size={16} />}
-            onClick={onEditDraft}
           >
             Edit
-          </Button>
+          </LinkButton>
         </>
       ) : (
         <>
           <Tooltip content="Reply" side="bottom" asChild>
-            <Button
+            <LinkButton
+              href={replyHref}
               variant="ghost"
               shape="square"
               size="sm"
               icon={<ArrowBendUpLeftIcon size={18} />}
-              onClick={onReply}
               aria-label="Reply"
             />
           </Tooltip>
           <Tooltip content="Reply All" side="bottom" asChild>
-            <Button
+            <LinkButton
+              href={replyAllHref}
               variant="ghost"
               shape="square"
               size="sm"
               icon={<ChatCircleIcon size={18} />}
-              onClick={onReplyAll}
               aria-label="Reply All"
             />
           </Tooltip>
           <Tooltip content="Forward" side="bottom" asChild>
-            <Button
+            <LinkButton
+              href={forwardHref}
               variant="ghost"
               shape="square"
               size="sm"
               icon={<ArrowBendUpRightIcon size={18} />}
-              onClick={onForward}
               aria-label="Forward"
             />
           </Tooltip>
@@ -178,12 +178,12 @@ export default function EmailPanelToolbar({
           />
         </Tooltip>
         <Tooltip content="Close" side="bottom" asChild>
-          <Button
+          <LinkButton
+            href={backHref}
             variant="ghost"
             shape="square"
             size="sm"
             icon={<XIcon size={18} />}
-            onClick={onBack}
             aria-label="Close"
             className="hidden md:inline-flex"
           />

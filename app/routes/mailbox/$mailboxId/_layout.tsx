@@ -2,62 +2,112 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { useEffect, useRef } from "react";
-import { Outlet, useParams } from "react-router";
+import { useEffect } from "react";
+import { Outlet, useFetcher, type ShouldRevalidateFunctionArgs } from "react-router";
 import AgentSidebar from "~/components/AgentSidebar";
-import ComposeEmail from "~/components/ComposeEmail";
+import { EMAIL_PANEL_FETCHER_KEY } from "~/components/EmailPanel";
 import Header from "~/components/Header";
-import Sidebar from "~/components/Sidebar";
+import Sidebar, { FOLDER_FETCHER_KEY } from "~/components/Sidebar";
+import { useSubmissionToast } from "~/hooks/useSubmissionToast";
 import { useUIStore } from "~/hooks/useUIStore";
-import { ok, serverApi } from "~/services/api.server";
-import type { Folder, Mailbox } from "~/types";
+import {
+  COMPOSE_FETCHER_KEY,
+  COMPOSE_SEARCH_KEYS,
+  type ComposeParams,
+  type ComposeState,
+  parseCompose,
+} from "~/lib/compose";
+import { revalidateOn } from "~/lib/revalidation";
+import { ok, type RpcClient, serverApi } from "~/services/api.server";
+import type { Email } from "~/types";
 import type { Route } from "./+types/_layout";
 
-/** Route id for `useRouteLoaderData` in descendants. */
-export const MAILBOX_ROUTE_ID = "routes/mailbox/$mailboxId/_layout";
+/**
+ * Resolve `?compose=...` to the messages the composer starts from. A link to
+ * a message that no longer exists opens a blank composer rather than failing
+ * the whole mailbox.
+ */
+async function loadCompose(
+  api: RpcClient,
+  mailboxId: string,
+  params: ComposeParams | null,
+): Promise<ComposeState | null> {
+  if (!params) return null;
 
-export interface MailboxLayoutData {
-  mailbox: Mailbox;
-  folders: Folder[];
+  const get = async (id: string | null | undefined): Promise<Email | null> => {
+    if (!id) return null;
+    const res = await api.mailboxes[":mailboxId"].emails[":id"].$get({ param: { mailboxId, id } });
+    return res.ok ? await res.json() : null;
+  };
+
+  if (params.mode === "draft") {
+    const draft = await get(params.draft);
+    if (!draft) return { mode: "new", original: null, draft: null };
+    return { mode: "draft", original: await get(draft.in_reply_to), draft };
+  }
+
+  const original = params.mode === "new" ? null : await get(params.original);
+  return { mode: original ? params.mode : "new", original, draft: null };
 }
 
 /**
- * Loads the mailbox record and its folder list -- the data the sidebar needs.
- * Both calls go through the in-process RPC client, so they hit the Hono app
- * without leaving the isolate.
+ * The mailbox record and folder list the chrome needs, plus the composer's
+ * starting point when `?compose` is set. Every call goes through the
+ * in-process RPC client, so none of them leave the isolate.
  */
-export async function loader({
-  params,
-  request,
-  context,
-}: Route.LoaderArgs): Promise<MailboxLayoutData> {
-  const mailboxId = decodeURIComponent(params.mailboxId);
+export async function loader({ params, request, context }: Route.LoaderArgs) {
+  const { mailboxId } = params;
   const api = serverApi(context, request);
   const param = { mailboxId };
 
-  const [mailbox, folders] = await Promise.all([
+  const [mailbox, folders, compose] = await Promise.all([
     ok(api.mailboxes[":mailboxId"].$get({ param })),
     ok(api.mailboxes[":mailboxId"].folders.$get({ param })),
+    loadCompose(api, mailboxId, parseCompose(new URL(request.url).searchParams)),
   ]);
 
-  return { mailbox, folders };
+  return { mailbox, folders, compose };
 }
 
-export default function MailboxRoute() {
-  const { mailboxId } = useParams<{ mailboxId: string }>();
-  const prevMailboxIdRef = useRef<string | undefined>(undefined);
-  const { isSidebarOpen, closeSidebar, isAgentPanelOpen, closePanel, closeComposeModal } =
-    useUIStore();
+/**
+ * Selecting an email, paging, or switching folders leaves the mailbox and its
+ * folder list as they were. Mutations still refresh it (unread counts), and so
+ * does opening or closing the composer.
+ */
+export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
+  return revalidateOn(args, { params: ["mailboxId"], search: COMPOSE_SEARCH_KEYS });
+}
 
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: loaderData ? `${loaderData.mailbox.email} — Agentic Inbox` : "Agentic Inbox" }];
+}
+
+/**
+ * Report mutations whose form unmounts when they succeed: a sent message
+ * closes the composer, a moved email closes the reading pane.
+ */
+function useMailboxToasts() {
+  useSubmissionToast(useFetcher({ key: COMPOSE_FETCHER_KEY }), {
+    send: "Email sent!",
+    saveDraft: "Draft saved!",
+  });
+  useSubmissionToast(useFetcher({ key: EMAIL_PANEL_FETCHER_KEY }), {
+    sendDraft: "Email sent!",
+    discardDraft: "Draft discarded",
+  });
+  useSubmissionToast(useFetcher({ key: FOLDER_FETCHER_KEY }), {
+    createFolder: "Folder created",
+  });
+}
+
+export default function MailboxRoute({ params }: Route.ComponentProps) {
+  const { isSidebarOpen, closeSidebar, isAgentPanelOpen } = useUIStore();
+  useMailboxToasts();
+
+  // The mobile sidebar is an overlay; switching mailboxes should not leave it open.
   useEffect(() => {
-    if (prevMailboxIdRef.current && mailboxId && prevMailboxIdRef.current !== mailboxId) {
-      closePanel();
-      closeComposeModal();
-      closeSidebar();
-    }
-
-    prevMailboxIdRef.current = mailboxId;
-  }, [mailboxId, closeComposeModal, closePanel, closeSidebar]);
+    closeSidebar();
+  }, [params.mailboxId, closeSidebar]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -96,8 +146,6 @@ export default function MailboxRoute() {
           <AgentSidebar />
         </div>
       )}
-
-      <ComposeEmail />
     </div>
   );
 }

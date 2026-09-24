@@ -2,121 +2,184 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Dialog, Input, Loader, Select, Text, useKumoToastManager } from "@cloudflare/kumo";
+import { Button, Dialog, Input, Select, Text, useKumoToastManager } from "@cloudflare/kumo";
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Link as RouterLink } from "react-router";
-import { queryKeys } from "~/queries/keys";
-import { useCreateMailbox, useDeleteMailbox, useMailboxes } from "~/queries/mailboxes";
-import api from "~/services/api";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { href, Link as RouterLink, useFetcher } from "react-router";
+import { errorMessage, field, ok, serverApi } from "~/services/api.server";
+import type { Route } from "./+types/index";
 
 export function meta() {
   return [{ title: "Agentic Inbox" }];
 }
 
-export default function HomeRoute() {
+type ActionData = { ok: true } | { ok: false; error: string };
+
+/**
+ * Mailboxes and routing config for the home page. Both calls stay in-process
+ * via the RPC client, so the list is in the first response.
+ */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const api = serverApi(context, request);
+  const [mailboxes, config] = await Promise.all([ok(api.mailboxes.$get()), ok(api.config.$get())]);
+
+  return {
+    mailboxes,
+    domains: config.domains,
+    emailAddresses: config.emailAddresses,
+  };
+}
+
+/**
+ * Create, delete, and the one-shot ensure of configured addresses. A failed
+ * create or delete comes back as data so the dialog can show it; `ok()` would
+ * throw into the error boundary instead.
+ */
+export async function action({ request, context }: Route.ActionArgs): Promise<ActionData> {
+  const api = serverApi(context, request);
+  const form = await request.formData();
+  const intent = field(form, "intent");
+
+  switch (intent) {
+    case "create": {
+      const email = field(form, "email");
+      const name = field(form, "name");
+      const res = await api.mailboxes.$post({ json: { email, name } });
+      if (!res.ok) {
+        return { ok: false, error: await errorMessage(res, "Failed to create mailbox") };
+      }
+      return { ok: true };
+    }
+
+    case "delete": {
+      const mailboxId = field(form, "mailboxId");
+      const res = await api.mailboxes[":mailboxId"].$delete({ param: { mailboxId } });
+      if (!res.ok) {
+        return { ok: false, error: await errorMessage(res, "Failed to delete mailbox") };
+      }
+      return { ok: true };
+    }
+
+    case "ensure": {
+      const [listed, config] = await Promise.all([ok(api.mailboxes.$get()), ok(api.config.$get())]);
+      const existing = new Set(listed.map((mailbox) => mailbox.email.toLowerCase()));
+      const missing = config.emailAddresses.filter((addr) => !existing.has(addr.toLowerCase()));
+      const failures: string[] = [];
+
+      await Promise.all(
+        missing.map(async (addr) => {
+          const name = addr.split("@")[0] || addr;
+          const res = await api.mailboxes.$post({ json: { email: addr, name } });
+          // A second ensure can lose the race to the first; the mailbox exists.
+          if (res.ok || res.status === 409) return;
+          failures.push(await errorMessage(res, "Failed to create mailbox"));
+        }),
+      );
+
+      const error = failures[0];
+      if (error) return { ok: false, error };
+      return { ok: true };
+    }
+
+    default:
+      return { ok: false, error: `Unknown intent: ${intent}` };
+  }
+}
+
+export default function HomeRoute({ loaderData }: Route.ComponentProps) {
+  const { mailboxes, domains, emailAddresses } = loaderData;
   const toastManager = useKumoToastManager();
-  const {
-    data: mailboxes = [],
-    refetch: refetchMailboxes,
-    isFetched: mailboxesFetched,
-  } = useMailboxes();
-  const createMailbox = useCreateMailbox();
-  const deleteMailbox = useDeleteMailbox();
-
-  const { data: configData } = useQuery({
-    queryKey: queryKeys.config,
-    queryFn: () => api.getConfig(),
-    staleTime: Infinity, // config rarely changes
-  });
-
-  const domains = configData?.domains ?? [];
-  const emailAddresses = configData?.emailAddresses ?? [];
+  const createFetcher = useFetcher<typeof action>();
+  const deleteFetcher = useFetcher<typeof action>();
+  const ensureFetcher = useFetcher<typeof action>();
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newPrefix, setNewPrefix] = useState("");
   const [selectedDomain, setSelectedDomain] = useState("");
   const [newName, setNewName] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [mailboxToDelete, setMailboxToDelete] = useState<{
     id: string;
     email: string;
   } | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
 
-  // Set default domain when config loads
+  // Derived rather than seeded into state: `domains` comes from the loader and
+  // can change under a revalidation, which a `useState` initialiser never sees.
+  const domain = domains.includes(selectedDomain) ? selectedDomain : (domains[0] ?? "");
+
+  const handledCreate = useRef<typeof createFetcher.data>(undefined);
+  const handledDelete = useRef<typeof deleteFetcher.data>(undefined);
+
   useEffect(() => {
-    if (domains.length > 0 && !selectedDomain) {
-      setSelectedDomain(domains[0]);
-    }
-  }, [domains, selectedDomain]);
-
-  // Auto-create mailboxes from config (run once when both data sources are ready)
-  const autoCreateDone = useRef(false);
-  useEffect(() => {
-    if (autoCreateDone.current) return;
-    if (emailAddresses.length === 0 || !mailboxesFetched) return;
-    const existingEmails = new Set(mailboxes.map((m) => m.email.toLowerCase()));
-    const toCreate = emailAddresses.filter((addr) => !existingEmails.has(addr.toLowerCase()));
-    if (toCreate.length === 0) {
-      autoCreateDone.current = true;
-      return;
-    }
-    autoCreateDone.current = true;
-    let cancelled = false;
-    void Promise.all(
-      toCreate.map((addr) => {
-        const localPart = addr.split("@")[0] || addr;
-        return api.createMailbox(addr, localPart).catch(() => {});
-      }),
-    ).then(() => {
-      if (!cancelled) void refetchMailboxes();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [emailAddresses, mailboxes, refetchMailboxes]);
-
-  const handleCreate = async (e: FormEvent) => {
-    e.preventDefault();
-    setCreateError(null);
-    if (!newPrefix || !selectedDomain) {
-      setCreateError("Please fill in all fields");
-      return;
-    }
-    const email = `${newPrefix}@${selectedDomain}`;
-    const name = newName || newPrefix;
-    setIsCreating(true);
-    try {
-      await createMailbox.mutateAsync({ email, name });
+    if (createFetcher.state !== "idle") return;
+    const result = createFetcher.data;
+    if (!result || result === handledCreate.current) return;
+    handledCreate.current = result;
+    if (result.ok) {
       toastManager.add({ title: "Mailbox created successfully!" });
       setIsCreateOpen(false);
       setNewPrefix("");
       setNewName("");
-    } catch (err: unknown) {
-      const message = (err instanceof Error ? err.message : null) || "Failed to create mailbox";
-      setCreateError(message);
-    } finally {
-      setIsCreating(false);
+      setCreateError(null);
+      return;
     }
-  };
+    setCreateError(result.error);
+  }, [createFetcher.state, createFetcher.data, toastManager]);
 
-  const handleDelete = async () => {
-    if (!mailboxToDelete) return;
-    setIsDeleting(true);
-    try {
-      await deleteMailbox.mutateAsync(mailboxToDelete.id);
+  useEffect(() => {
+    if (deleteFetcher.state !== "idle") return;
+    const result = deleteFetcher.data;
+    if (!result || result === handledDelete.current) return;
+    handledDelete.current = result;
+    if (result.ok) {
       toastManager.add({ title: "Mailbox deleted" });
       setIsDeleteOpen(false);
       setMailboxToDelete(null);
-    } catch {
-      toastManager.add({ title: "Failed to delete mailbox", variant: "error" });
-    } finally {
-      setIsDeleting(false);
+      return;
     }
+    toastManager.add({ title: result.error, variant: "error" });
+  }, [deleteFetcher.state, deleteFetcher.data, toastManager]);
+
+  // Auto-creation runs without anyone watching, so a failure has to announce
+  // itself: the addresses are listed from config either way, and their
+  // mailboxes would 404 on the way in.
+  const handledEnsure = useRef<typeof ensureFetcher.data>(undefined);
+  useEffect(() => {
+    if (ensureFetcher.state !== "idle") return;
+    const result = ensureFetcher.data;
+    if (!result || result === handledEnsure.current) return;
+    handledEnsure.current = result;
+    if (!result.ok) {
+      toastManager.add({ title: result.error, variant: "error" });
+    }
+  }, [ensureFetcher.state, ensureFetcher.data, toastManager]);
+
+  // Configured addresses that have no mailbox yet are created once. The
+  // action revalidates this loader, so the list updates without a refetch.
+  const autoCreateDone = useRef(false);
+  useEffect(() => {
+    if (autoCreateDone.current) return;
+    if (emailAddresses.length === 0) return;
+    autoCreateDone.current = true;
+    const existingEmails = new Set(mailboxes.map((mailbox) => mailbox.email.toLowerCase()));
+    const missing = emailAddresses.some((addr) => !existingEmails.has(addr.toLowerCase()));
+    if (!missing) return;
+
+    const form = new FormData();
+    form.set("intent", "ensure");
+    void ensureFetcher.submit(form, { method: "post" });
+    // `ensureFetcher` is stable per fetcher; re-running on its identity would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailAddresses, mailboxes]);
+
+  const handleCreate = (event: FormEvent) => {
+    if (!newPrefix || !domain) {
+      event.preventDefault();
+      setCreateError("Please fill in all fields");
+      return;
+    }
+    setCreateError(null);
   };
 
   const isConfigured = emailAddresses.length > 0;
@@ -127,8 +190,8 @@ export default function HomeRoute() {
         name: addr.split("@")[0] || addr,
       }))
     : mailboxes;
-
-  const isLoading = !configData;
+  const isCreating = createFetcher.state !== "idle";
+  const isDeleting = deleteFetcher.state !== "idle";
 
   return (
     <div className="min-h-screen bg-kumo-recessed">
@@ -151,16 +214,12 @@ export default function HomeRoute() {
           )}
         </div>
 
-        {isLoading ? (
-          <div className="flex justify-center py-20">
-            <Loader size="lg" />
-          </div>
-        ) : accounts.length > 0 ? (
+        {accounts.length > 0 ? (
           <div className="rounded-xl border border-kumo-line bg-kumo-base overflow-hidden">
             {accounts.map((account, idx) => (
               <RouterLink
                 key={account.id}
-                to={`/mailbox/${account.id}`}
+                to={href("/mailbox/:mailboxId", { mailboxId: account.id })}
                 className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-kumo-tint ${
                   idx > 0 ? "border-t border-kumo-line" : ""
                 }`}
@@ -221,11 +280,23 @@ export default function HomeRoute() {
         )}
       </div>
 
-      {/* Create Dialog */}
-      <Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+      <Dialog.Root
+        open={isCreateOpen}
+        onOpenChange={(open) => {
+          setIsCreateOpen(open);
+          if (open) setCreateError(null);
+        }}
+      >
         <Dialog size="sm" className="p-6">
           <Dialog.Title className="text-base font-semibold mb-5">Create New Mailbox</Dialog.Title>
-          <form onSubmit={handleCreate} className="space-y-4">
+          <createFetcher.Form method="post" onSubmit={handleCreate} className="space-y-4">
+            <input type="hidden" name="intent" value="create" />
+            <input
+              type="hidden"
+              name="email"
+              value={newPrefix && domain ? `${newPrefix}@${domain}` : ""}
+            />
+            <input type="hidden" name="name" value={newName || newPrefix} />
             {createError && (
               <Text variant="error" size="sm">
                 {createError}
@@ -251,7 +322,7 @@ export default function HomeRoute() {
                   <div className="flex-1">
                     <Select
                       aria-label="Domain"
-                      value={selectedDomain}
+                      value={domain}
                       onValueChange={(value) => {
                         if (value) setSelectedDomain(value);
                       }}
@@ -264,7 +335,7 @@ export default function HomeRoute() {
                     </Select>
                   </div>
                 ) : (
-                  <span className="text-sm text-kumo-subtle">{selectedDomain || "no domain"}</span>
+                  <span className="text-sm text-kumo-subtle">{domain || "no domain"}</span>
                 )}
               </div>
             </div>
@@ -278,7 +349,7 @@ export default function HomeRoute() {
             <div className="flex justify-end gap-2 pt-2">
               <Dialog.Close
                 render={(props) => (
-                  <Button {...props} variant="secondary" size="sm">
+                  <Button {...props} type="button" variant="secondary" size="sm">
                     Cancel
                   </Button>
                 )}
@@ -288,16 +359,15 @@ export default function HomeRoute() {
                 variant="primary"
                 size="sm"
                 loading={isCreating}
-                disabled={!selectedDomain}
+                disabled={!domain}
               >
                 Create
               </Button>
             </div>
-          </form>
+          </createFetcher.Form>
         </Dialog>
       </Dialog.Root>
 
-      {/* Delete Dialog */}
       <Dialog.Root
         open={isDeleteOpen}
         onOpenChange={(open) => {
@@ -312,18 +382,26 @@ export default function HomeRoute() {
             <strong className="text-kumo-default">{mailboxToDelete?.email}</strong>? This action
             cannot be undone.
           </Dialog.Description>
-          <div className="flex justify-end gap-2">
+          <deleteFetcher.Form method="post" className="flex justify-end gap-2">
+            <input type="hidden" name="intent" value="delete" />
+            <input type="hidden" name="mailboxId" value={mailboxToDelete?.id ?? ""} />
             <Dialog.Close
               render={(props) => (
-                <Button {...props} variant="secondary" size="sm">
+                <Button {...props} type="button" variant="secondary" size="sm">
                   Cancel
                 </Button>
               )}
             />
-            <Button variant="destructive" size="sm" loading={isDeleting} onClick={handleDelete}>
+            <Button
+              type="submit"
+              variant="destructive"
+              size="sm"
+              loading={isDeleting}
+              disabled={!mailboxToDelete}
+            >
               Delete
             </Button>
-          </div>
+          </deleteFetcher.Form>
         </Dialog>
       </Dialog.Root>
     </div>

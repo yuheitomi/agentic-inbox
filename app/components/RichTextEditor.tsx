@@ -35,6 +35,9 @@ interface RichTextEditorProps {
 
 export default function RichTextEditor({ value, onChange }: RichTextEditorProps) {
   const editor = useEditor({
+    // The composer can be server-rendered (`?compose` on a fresh load); the
+    // editor needs the DOM, so it mounts after hydration instead.
+    immediatelyRender: false,
     extensions: [
       StarterKit,
       Underline,

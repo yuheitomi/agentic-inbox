@@ -21,9 +21,9 @@ import {
 import type { UIMessage } from "ai";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
-import { useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import remarkGfm from "remark-gfm";
-import { useUIStore } from "~/hooks/useUIStore";
+import { composeHref } from "~/lib/compose";
 
 const TOOL_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   list_emails: {
@@ -95,6 +95,18 @@ function hasDraftReplyTool(message: UIMessage): boolean {
     const toolName = getToolNameFromPart(part);
     return toolName === "draft_reply";
   });
+}
+
+/** The id of the draft a `draft_reply` tool call in `message` stored, if it finished. */
+function draftIdFromMessage(message: UIMessage): string | null {
+  for (const part of message.parts) {
+    if (getToolNameFromPart(part) !== "draft_reply") continue;
+    const output: unknown = "output" in part ? part.output : undefined;
+    if (output && typeof output === "object" && "draftId" in output) {
+      if (typeof output.draftId === "string" && output.draftId) return output.draftId;
+    }
+  }
+  return null;
 }
 
 function DraftActions({ onEdit, disabled }: { onEdit: () => void; disabled: boolean }) {
@@ -253,7 +265,8 @@ function AgentChatConnected({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [inputValue, setInputValue] = useState("");
-  const { startCompose } = useUIStore();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const agent = useAgent({ agent: "EmailAgent", name: mailboxId });
   const { messages, sendMessage, status, setMessages, stop } = useAgentChat({ agent });
@@ -350,35 +363,13 @@ function AgentChatConnected({
                 isStreaming={isStreaming}
                 onAction={(action) => {
                   if (action === "edit") {
-                    // Extract draft data from the draft_reply tool result
-                    let draftData: {
-                      to?: string;
-                      subject?: string;
-                      body?: string;
-                      id?: string;
-                    } | null = null;
-                    for (const part of msg.parts) {
-                      if ((part as any).toolName === "draft_reply" && (part as any).result) {
-                        draftData = (part as any).result;
-                        break;
-                      }
-                    }
-                    if (draftData) {
-                      const draftEmail = {
-                        id: draftData.id || "",
-                        subject: draftData.subject || "",
-                        sender: mailboxId,
-                        recipient: draftData.to || "",
-                        date: new Date().toISOString(),
-                        read: true,
-                        starred: false,
-                        body: draftData.body || "",
-                      };
-                      startCompose({
-                        mode: "reply",
-                        originalEmail: null,
-                        draftEmail,
-                      });
+                    const draftId = draftIdFromMessage(msg);
+                    if (draftId) {
+                      // The tool stored the draft; open it by id so the
+                      // composer loads the saved copy, reply threading included.
+                      void navigate(
+                        composeHref(location, mailboxId, { mode: "draft", draft: draftId }),
+                      );
                     } else {
                       void sendMessage({
                         text: "Let me edit this draft first. Show me what you have so I can modify it.",

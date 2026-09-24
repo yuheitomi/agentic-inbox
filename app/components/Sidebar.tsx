@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Dialog, Input, Tooltip } from "@cloudflare/kumo";
+import { Badge, Button, Dialog, Input, LinkButton, Tooltip } from "@cloudflare/kumo";
 import {
   ArchiveIcon,
   CaretLeftIcon,
@@ -15,18 +15,14 @@ import {
   TrayIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
-import {
-  href,
-  NavLink,
-  unstable_useRoute as useRoute,
-  useNavigate,
-  useParams,
-  useRevalidator,
-} from "react-router";
+import { href, Link, NavLink, useFetcher, useLocation } from "react-router";
 import { Folders, SYSTEM_FOLDER_IDS } from "shared/folders";
+import { useMailboxData } from "~/hooks/useMailboxData";
 import { useUIStore } from "~/hooks/useUIStore";
-import { useCreateFolder } from "~/queries/folders";
-import { MAILBOX_ROUTE_ID } from "~/routes/mailbox/$mailboxId/_layout";
+import { composeHref } from "~/lib/compose";
+
+/** Fetcher key for folder mutations; the mailbox layout reports their outcome. */
+export const FOLDER_FETCHER_KEY = "folders";
 
 const FOLDER_ICONS: Record<string, React.ReactNode> = {
   [Folders.INBOX]: <TrayIcon size={18} weight="regular" />,
@@ -73,16 +69,13 @@ function FolderLink({ to, icon, label, unreadCount, onClick }: FolderLinkProps) 
 }
 
 export default function Sidebar() {
-  const { mailboxId = "" } = useParams<{ mailboxId: string }>();
-  const navigate = useNavigate();
+  const location = useLocation();
   // Folders and the mailbox record come from the `mailbox` route's loader --
   // the layer that owns the chrome this sidebar is part of.
-  const layout = useRoute(MAILBOX_ROUTE_ID)?.loaderData;
-  const folders = layout?.folders ?? [];
-  const currentMailbox = layout?.mailbox;
-  const createFolderMutation = useCreateFolder();
-  const revalidator = useRevalidator();
-  const { startCompose, closeSidebar } = useUIStore();
+  const { folders, mailbox: currentMailbox } = useMailboxData();
+  const mailboxId = currentMailbox.id;
+  const folderFetcher = useFetcher({ key: FOLDER_FETCHER_KEY });
+  const { closeSidebar } = useUIStore();
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
 
@@ -96,22 +89,9 @@ export default function Sidebar() {
     return found?.unreadCount || 0;
   };
 
-  const handleCreateFolder = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newFolderName.trim() && mailboxId) {
-      // The folder list is loader-backed now, so refresh the route chain
-      // rather than relying on the mutation's query invalidation.
-      createFolderMutation.mutate(
-        { mailboxId, name: newFolderName.trim() },
-        { onSettled: () => void revalidator.revalidate() },
-      );
-      setNewFolderName("");
-      setIsCreateFolderOpen(false);
-    }
-  };
+  const newMessageHref = composeHref(location, mailboxId, { mode: "new" });
 
   const displayName = useMemo(() => {
-    if (!currentMailbox) return mailboxId.split("@")[0] || "Mailbox";
     // Prefer settings.fromName > name > local part of email
     if (currentMailbox.settings?.fromName) {
       return currentMailbox.settings.fromName;
@@ -120,7 +100,7 @@ export default function Sidebar() {
       return currentMailbox.name;
     }
     return currentMailbox.email.split("@")[0] || currentMailbox.name;
-  }, [currentMailbox, mailboxId]);
+  }, [currentMailbox]);
 
   const handleNavClick = () => {
     // Close mobile sidebar on navigation
@@ -131,35 +111,31 @@ export default function Sidebar() {
     <aside className="h-full w-64 bg-kumo-recessed flex flex-col shrink-0 border-r border-kumo-line">
       {/* Back + identity */}
       <div className="px-4 pt-4 pb-1">
-        <button
-          type="button"
-          onClick={() => {
-            void navigate("/");
-            closeSidebar();
-          }}
-          className="flex items-center gap-1.5 text-kumo-subtle text-sm hover:text-kumo-default transition-colors mb-2.5 cursor-pointer bg-transparent border-0 p-0"
+        <Link
+          to="/"
+          onClick={closeSidebar}
+          className="flex w-fit items-center gap-1.5 text-kumo-subtle text-sm no-underline hover:text-kumo-default transition-colors mb-2.5"
         >
           <CaretLeftIcon size={14} />
           <span>Mailboxes</span>
-        </button>
+        </Link>
         <div className="px-1">
           <div className="text-base font-semibold text-kumo-default truncate">{displayName}</div>
-          <div className="text-sm text-kumo-subtle truncate mt-0.5">
-            {currentMailbox?.email || mailboxId}
-          </div>
+          <div className="text-sm text-kumo-subtle truncate mt-0.5">{currentMailbox.email}</div>
         </div>
       </div>
 
       {/* Compose */}
       <div className="px-3 py-3">
-        <Button
+        <LinkButton
+          href={newMessageHref}
+          onClick={closeSidebar}
           variant="primary"
           icon={<PencilSimpleIcon size={16} />}
-          onClick={() => startCompose()}
           className="w-full"
         >
           Compose
-        </Button>
+        </LinkButton>
       </div>
 
       {/* Navigation */}
@@ -232,9 +208,20 @@ export default function Sidebar() {
       <Dialog.Root open={isCreateFolderOpen} onOpenChange={setIsCreateFolderOpen}>
         <Dialog size="sm" className="p-6">
           <Dialog.Title className="text-base font-semibold mb-4">Create folder</Dialog.Title>
-          <form onSubmit={handleCreateFolder} className="space-y-4">
+          <folderFetcher.Form
+            method="post"
+            action={href("/mailbox/:mailboxId/folders", { mailboxId })}
+            onSubmit={() => {
+              // The layout toasts the outcome; the dialog need not wait for it.
+              setNewFolderName("");
+              setIsCreateFolderOpen(false);
+            }}
+            className="space-y-4"
+          >
+            <input type="hidden" name="intent" value="createFolder" />
             <Input
               label="Folder name"
+              name="name"
               placeholder="e.g. Projects"
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
@@ -243,7 +230,7 @@ export default function Sidebar() {
             <div className="flex justify-end gap-2">
               <Dialog.Close
                 render={(props) => (
-                  <Button {...props} variant="secondary">
+                  <Button {...props} type="button" variant="secondary">
                     Cancel
                   </Button>
                 )}
@@ -252,7 +239,7 @@ export default function Sidebar() {
                 Create
               </Button>
             </div>
-          </form>
+          </folderFetcher.Form>
         </Dialog>
       </Dialog.Root>
     </aside>

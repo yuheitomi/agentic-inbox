@@ -2,10 +2,9 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Empty, LinkProvider, Loader, Toasty, TooltipProvider } from "@cloudflare/kumo";
+import { Empty, LinkButton, LinkProvider, Loader, Toasty, TooltipProvider } from "@cloudflare/kumo";
 import { WarningIcon } from "@phosphor-icons/react";
-import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { forwardRef, useState } from "react";
+import { forwardRef } from "react";
 import {
   isRouteErrorResponse,
   Links,
@@ -15,45 +14,11 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
-import { ApiError } from "~/services/api";
+import type { Route } from "./+types/root";
 import "./index.css";
 
-function makeQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        staleTime: 30_000,
-        refetchOnWindowFocus: false,
-        retry: (failureCount, error) => {
-          // Don't retry 4xx errors (not found, unauthorized, etc.)
-          if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-            return false;
-          }
-          return failureCount < 2;
-        },
-      },
-    },
-    mutationCache: new MutationCache({
-      onError: (error) => {
-        // Global fallback for mutations that don't handle errors themselves.
-        // Consumers using mutateAsync + try/catch handle their own errors.
-        console.error("Mutation failed:", error);
-      },
-    }),
-  });
-}
-
-// Lazy singleton for the browser — avoids module-scope instantiation that
-// leaks cache across SSR requests.
-let browserQueryClient: QueryClient | undefined;
-function getQueryClient() {
-  if (typeof window === "undefined") {
-    // SSR: always create a fresh client per request to prevent cross-user cache leaks
-    return makeQueryClient();
-  }
-  // Browser: reuse the same client across navigations
-  if (!browserQueryClient) browserQueryClient = makeQueryClient();
-  return browserQueryClient;
+export function meta() {
+  return [{ title: "Agentic Inbox" }];
 }
 
 const KumoLink = forwardRef<
@@ -74,7 +39,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="48x48 32x32 16x16" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Agentic Inbox</title>
         <Meta />
         <Links />
       </head>
@@ -96,23 +60,18 @@ export function HydrateFallback() {
 }
 
 export default function App() {
-  // Use useState to ensure each SSR request gets a fresh client while the
-  // browser reuses the same singleton across navigations.
-  const [queryClient] = useState(getQueryClient);
   return (
-    <QueryClientProvider client={queryClient}>
-      <LinkProvider component={KumoLink}>
-        <TooltipProvider>
-          <Toasty>
-            <Outlet />
-          </Toasty>
-        </TooltipProvider>
-      </LinkProvider>
-    </QueryClientProvider>
+    <LinkProvider component={KumoLink}>
+      <TooltipProvider>
+        <Toasty>
+          <Outlet />
+        </Toasty>
+      </TooltipProvider>
+    </LinkProvider>
   );
 }
 
-export function ErrorBoundary({ error }: { error: unknown }) {
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let title = "Something went wrong";
   let description = "An unexpected error occurred. Please try again.";
   let status: number | null = null;
@@ -137,14 +96,9 @@ export function ErrorBoundary({ error }: { error: unknown }) {
         title={status === 404 ? "404 — Page not found" : title}
         description={description}
         contents={
-          <Button
-            variant="primary"
-            onClick={() => {
-              window.location.href = "/";
-            }}
-          >
+          <LinkButton href="/" variant="primary">
             Go Home
-          </Button>
+          </LinkButton>
         }
       />
     </div>

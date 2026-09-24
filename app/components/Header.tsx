@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Input, Tooltip } from "@cloudflare/kumo";
+import { Button, Input, LinkButton, Tooltip } from "@cloudflare/kumo";
 import {
   GearSixIcon,
   ListIcon,
@@ -10,59 +10,27 @@ import {
   RobotIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { type KeyboardEvent, useEffect, useState } from "react";
-import { href, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { type KeyboardEvent, useState } from "react";
+import { Form, href, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { Folders } from "shared/folders";
 import { useUIStore } from "~/hooks/useUIStore";
 
 export default function Header() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const { mailboxId = "" } = useParams<{ mailboxId: string }>();
-  const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen } = useUIStore();
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 
-  // Sync search input with URL query param so it stays populated
-  const urlQuery = searchParams.get("q") || "";
-  useEffect(() => {
-    if (location.pathname.includes("/search") && urlQuery) {
-      setSearchQuery(urlQuery);
-    }
-  }, [urlQuery, location.pathname]);
+  // On the results page the box shows the query it ran; keyed on it so going
+  // back to an earlier search refills the box instead of keeping stale text.
+  const onSearchPage = location.pathname.includes("/search");
+  const urlQuery = onSearchPage ? searchParams.get("q") || "" : "";
 
-  const performSearch = () => {
-    if (mailboxId && searchQuery.trim()) {
-      const q = searchQuery.trim();
-      const path = href("/mailbox/:mailboxId/search", { mailboxId });
-      void navigate(`${path}?q=${encodeURIComponent(q)}`);
-      setIsSearchExpanded(false);
-    }
-  };
-
-  const clearSearch = () => {
-    setSearchQuery("");
-    if (location.pathname.includes("/search") && mailboxId) {
-      void navigate(
-        href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX }),
-      );
-    }
-  };
-
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter") {
-      performSearch();
-    }
-    if (e.key === "Escape") {
-      if (searchQuery) {
-        clearSearch();
-      } else {
-        setIsSearchExpanded(false);
-      }
-    }
-  };
-
+  const inboxHref = href("/mailbox/:mailboxId/emails/:folder", {
+    mailboxId,
+    folder: Folders.INBOX,
+  });
   const isSettingsActive = location.pathname.includes("/settings");
 
   return (
@@ -79,41 +47,14 @@ export default function Header() {
       />
 
       {/* Search - full on desktop, collapsible on mobile */}
-      <div
-        className={`flex-1 max-w-lg transition-all flex items-center gap-1 ${
-          isSearchExpanded ? "flex" : "hidden md:flex"
-        }`}
-      >
-        <div className="flex-1 relative flex items-center">
-          <Input
-            className="w-full"
-            aria-label="Search emails"
-            placeholder="Search emails... (try from:name, is:unread, has:attachment)"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={clearSearch}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-kumo-subtle hover:text-kumo-default hover:bg-kumo-tint transition-colors"
-              aria-label="Clear search"
-            >
-              <XIcon size={14} />
-            </button>
-          )}
-        </div>
-        <Tooltip content="Search" side="bottom" asChild>
-          <Button
-            variant="ghost"
-            shape="square"
-            icon={<MagnifyingGlassIcon size={20} />}
-            onClick={performSearch}
-            aria-label="Search"
-          />
-        </Tooltip>
-      </div>
+      <SearchBox
+        key={urlQuery}
+        action={href("/mailbox/:mailboxId/search", { mailboxId })}
+        initialQuery={urlQuery}
+        clearHref={onSearchPage ? inboxHref : null}
+        isExpanded={isSearchExpanded}
+        onCollapse={() => setIsSearchExpanded(false)}
+      />
 
       {/* Search toggle button - mobile only, hidden when search is expanded */}
       {!isSearchExpanded && (
@@ -144,21 +85,96 @@ export default function Header() {
           />
         </Tooltip>
         <Tooltip content="Settings" side="bottom" asChild>
-          <Button
+          <LinkButton
+            href={
+              isSettingsActive ? inboxHref : href("/mailbox/:mailboxId/settings", { mailboxId })
+            }
             variant={isSettingsActive ? "secondary" : "ghost"}
             shape="square"
             icon={<GearSixIcon size={20} />}
-            onClick={() =>
-              navigate(
-                isSettingsActive
-                  ? href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX })
-                  : href("/mailbox/:mailboxId/settings", { mailboxId }),
-              )
-            }
             aria-label="Settings"
           />
         </Tooltip>
       </div>
     </header>
+  );
+}
+
+/**
+ * The search box: a GET form to the results route, so submitting it is an
+ * ordinary navigation to `/search?q=...` that works before hydration too.
+ */
+function SearchBox({
+  action,
+  initialQuery,
+  clearHref,
+  isExpanded,
+  onCollapse,
+}: {
+  action: string;
+  initialQuery: string;
+  /** Where clearing the box goes: back to the inbox from the results page, else nowhere. */
+  clearHref: string | null;
+  isExpanded: boolean;
+  onCollapse: () => void;
+}) {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState(initialQuery);
+
+  const clear = () => {
+    setQuery("");
+    if (clearHref) void navigate(clearHref);
+  };
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    if (query) clear();
+    else onCollapse();
+  };
+
+  return (
+    <Form
+      method="get"
+      action={action}
+      role="search"
+      onSubmit={(e) => {
+        if (!query.trim()) e.preventDefault();
+        else onCollapse();
+      }}
+      className={`flex-1 max-w-lg transition-all flex items-center gap-1 ${
+        isExpanded ? "flex" : "hidden md:flex"
+      }`}
+    >
+      <div className="flex-1 relative flex items-center">
+        <Input
+          className="w-full"
+          name="q"
+          aria-label="Search emails"
+          placeholder="Search emails... (try from:name, is:unread, has:attachment)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={clear}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-kumo-subtle hover:text-kumo-default hover:bg-kumo-tint transition-colors"
+            aria-label="Clear search"
+          >
+            <XIcon size={14} />
+          </button>
+        )}
+      </div>
+      <Tooltip content="Search" side="bottom" asChild>
+        <Button
+          type="submit"
+          variant="ghost"
+          shape="square"
+          icon={<MagnifyingGlassIcon size={20} />}
+          aria-label="Search"
+        />
+      </Tooltip>
+    </Form>
   );
 }

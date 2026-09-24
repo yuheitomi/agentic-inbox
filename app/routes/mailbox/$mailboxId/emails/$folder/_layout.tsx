@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Pagination, Tooltip } from "@cloudflare/kumo";
+import { Button, LinkButton, Pagination, Tooltip } from "@cloudflare/kumo";
 import {
   ArchiveIcon,
   ArrowBendUpLeftIcon,
@@ -20,11 +20,10 @@ import { useMemo } from "react";
 import {
   href,
   Link,
-  redirect,
   useFetcher,
+  useLocation,
   useMatches,
   useNavigation,
-  unstable_useRoute as useRoute,
   useRevalidator,
   useSearchParams,
   type ShouldRevalidateFunctionArgs,
@@ -32,23 +31,23 @@ import {
 import { formatListDate } from "shared/dates";
 import { Folders } from "shared/folders";
 import MailboxSplitView from "~/components/MailboxSplitView";
+import { useMailboxData } from "~/hooks/useMailboxData";
 import { useRevalidateInterval } from "~/hooks/useRevalidateInterval";
-import { useUIStore } from "~/hooks/useUIStore";
+import { useSubmissionToast } from "~/hooks/useSubmissionToast";
+import { withCompose, withoutCompose } from "~/lib/compose";
+import { revalidateOn } from "~/lib/revalidation";
+import { FOLDER_EMAIL_ROUTE_ID } from "~/lib/route-ids";
 import { getSnippetText } from "~/lib/utils";
-import { MAILBOX_ROUTE_ID } from "~/routes/mailbox/$mailboxId/_layout";
-import { field, ok, okEmpty, serverApi } from "~/services/api.server";
+import { ok, serverApi } from "~/services/api.server";
 import type { Email } from "~/types";
 import type { Route } from "./+types/_layout";
 
 const PAGE_SIZE = 25;
 const POLL_INTERVAL_MS = 30_000;
 
-export const EMAIL_DETAIL_ROUTE_ID = "routes/mailbox/$mailboxId/emails/$folder/$emailId";
-
 // ── Data ───────────────────────────────────────────────────────────
 
 export async function loader({ params, request, context }: Route.LoaderArgs) {
-  const mailboxId = decodeURIComponent(params.mailboxId);
   const api = serverApi(context, request);
 
   const rawPage = Number(new URL(request.url).searchParams.get("page") ?? "1");
@@ -56,7 +55,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
 
   const { emails, totalCount } = await ok(
     api.mailboxes[":mailboxId"].emails.$get({
-      param: { mailboxId },
+      param: { mailboxId: params.mailboxId },
       query: { folder: params.folder, threaded: true, page, limit: PAGE_SIZE },
     }),
   );
@@ -64,90 +63,21 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   return { emails, totalCount, page };
 }
 
-export async function action({ params, request, context }: Route.ActionArgs) {
-  const mailboxId = decodeURIComponent(params.mailboxId);
-  const api = serverApi(context, request);
-
-  const form = await request.formData();
-  const intent = field(form, "intent");
-  const emailId = field(form, "emailId");
-  const emailParam = { mailboxId, id: emailId };
-
-  switch (intent) {
-    case "star":
-      await ok(
-        api.mailboxes[":mailboxId"].emails[":id"].$put({
-          param: emailParam,
-          json: { starred: form.get("starred") === "true" },
-        }),
-      );
-      return { ok: true };
-
-    case "read":
-      await ok(
-        api.mailboxes[":mailboxId"].emails[":id"].$put({
-          param: emailParam,
-          json: { read: form.get("read") === "true" },
-        }),
-      );
-      return { ok: true };
-
-    case "markThreadRead": {
-      const threadId = field(form, "threadId");
-      if (threadId) {
-        await ok(
-          api.mailboxes[":mailboxId"].threads[":threadId"].read.$post({
-            param: { mailboxId, threadId },
-          }),
-        );
-      } else {
-        await ok(
-          api.mailboxes[":mailboxId"].emails[":id"].$put({
-            param: emailParam,
-            json: { read: true },
-          }),
-        );
-      }
-      return { ok: true };
-    }
-
-    case "delete": {
-      // The API deletes the email's attachment blobs from R2 along with it.
-      const res = await api.mailboxes[":mailboxId"].emails[":id"].$delete({ param: emailParam });
-      if (res.status === 404) return { ok: false, error: "Email not found" };
-      await okEmpty(res);
-      // The row sends `redirectTo` when it is the one open in the reading
-      // pane; the action cannot see the child route's `:emailId` itself.
-      const redirectTo = field(form, "redirectTo");
-      if (redirectTo.startsWith("/")) return redirect(redirectTo);
-      return { ok: true };
-    }
-
-    default:
-      return { ok: false, error: `Unknown intent: ${intent}` };
-  }
+/**
+ * The list must NOT refetch when the user selects a different email or opens
+ * the composer -- those only change the child route's `:emailId` or the
+ * `?compose` keys. Mutations, polling and the refresh button still reload it:
+ * any of them can change read state, starred state, or membership.
+ */
+export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
+  return revalidateOn(args, { params: ["mailboxId", "folder"], search: ["page"] });
 }
 
-/**
- * The list must NOT refetch when the user selects a different email -- that
- * navigation only changes the child route's `:emailId`. Without this, clicking
- * through a thread list refetches 25 conversations every time.
- */
-export function shouldRevalidate({
-  currentUrl,
-  nextUrl,
-  currentParams,
-  nextParams,
-  formMethod,
-}: ShouldRevalidateFunctionArgs) {
-  // Any mutation can change read state, starred state, or membership. Always
-  // revalidate rather than inspecting the action result -- a future action
-  // that returns nothing would otherwise silently stop refreshing the list.
-  if (formMethod && formMethod !== "GET") return true;
-  if (currentParams.folder !== nextParams.folder) return true;
-  if (currentParams.mailboxId !== nextParams.mailboxId) return true;
-  // Pagination and sort live in the query string.
-  return currentUrl.search !== nextUrl.search;
+export function meta({ matches, params }: Route.MetaArgs) {
+  // Matches are typed by position: root, then the mailbox layout.
+  const folders = matches[1]?.loaderData?.folders;
+  const name = folders?.find((f) => f.id === params.folder)?.name ?? params.folder;
+  return [{ title: `${name} — Agentic Inbox` }];
 }
 
 // ── Presentation ───────────────────────────────────────────────────
@@ -215,7 +145,7 @@ function EmailListSkeleton() {
   );
 }
 
-function FolderEmptyState({ folder, onCompose }: { folder?: string; onCompose: () => void }) {
+function FolderEmptyState({ folder, composeHref }: { folder?: string; composeHref: string }) {
   const config = (folder && FOLDER_EMPTY_STATES[folder]) || {
     icon: <EnvelopeSimpleIcon size={48} weight="thin" className="text-kumo-subtle" />,
     title: "No emails",
@@ -228,14 +158,14 @@ function FolderEmptyState({ folder, onCompose }: { folder?: string; onCompose: (
       <h3 className="text-base font-semibold text-kumo-default mb-1.5">{config.title}</h3>
       <p className="text-sm text-kumo-subtle max-w-xs mb-5">{config.description}</p>
       {"showCompose" in config && config.showCompose && (
-        <Button
+        <LinkButton
+          href={composeHref}
           variant="primary"
           size="sm"
           icon={<PencilSimpleIcon size={16} />}
-          onClick={onCompose}
         >
           Compose
-        </Button>
+        </LinkButton>
       )}
     </div>
   );
@@ -277,7 +207,11 @@ function EmailRow({
   search: string;
   listPath: string;
 }) {
-  const fetcher = useFetcher<typeof action>();
+  // Rows post to the email's own detail route, which owns every per-email
+  // mutation; the list revalidates like any other loader on the page.
+  const fetcher = useFetcher();
+  useSubmissionToast(fetcher, {});
+  const emailAction = `${listPath}/${encodeURIComponent(email.id)}`;
 
   const pendingIntent = fetcher.formData?.get("intent");
   const starred =
@@ -302,7 +236,7 @@ function EmailRow({
       </div>
 
       {/* Star */}
-      <fetcher.Form method="post" className="shrink-0 flex">
+      <fetcher.Form method="post" action={emailAction} className="shrink-0 flex">
         <input type="hidden" name="intent" value="star" />
         <input type="hidden" name="emailId" value={email.id} />
         <input type="hidden" name="starred" value={String(!starred)} />
@@ -364,7 +298,7 @@ function EmailRow({
 
       {/* Hover actions */}
       <div className="hidden group-hover:flex items-center shrink-0">
-        <fetcher.Form method="post" className="flex">
+        <fetcher.Form method="post" action={emailAction} className="flex">
           <input type="hidden" name="intent" value="read" />
           <input type="hidden" name="emailId" value={email.id} />
           <input type="hidden" name="read" value={String(!read)} />
@@ -382,6 +316,7 @@ function EmailRow({
 
         <fetcher.Form
           method="post"
+          action={emailAction}
           className="flex"
           onSubmit={(e) => {
             if (!window.confirm("Are you sure you want to delete this email?")) {
@@ -415,9 +350,9 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
   const { folder } = params;
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
-  const { startCompose } = useUIStore();
 
   useRevalidateInterval(POLL_INTERVAL_MS);
 
@@ -426,12 +361,12 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
   const matches = useMatches();
   const selectedEmailId =
     (
-      matches.find((m) => m.id === EMAIL_DETAIL_ROUTE_ID)?.params as
+      matches.find((m) => m.id === FOLDER_EMAIL_ROUTE_ID)?.params as
         | { emailId?: string }
         | undefined
     )?.emailId ?? null;
 
-  const folders = useRoute(MAILBOX_ROUTE_ID)?.loaderData?.folders ?? [];
+  const { folders } = useMailboxData();
   const folderName = useMemo(() => {
     const found = folders.find((f) => f.id === folder);
     if (found) return found.name;
@@ -442,7 +377,8 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
   const isChangingFolder =
     navigation.state === "loading" && navigation.location?.pathname.includes("/emails/");
   const isPanelOpen = selectedEmailId !== null;
-  const search = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  // Rows open an email in place of any open composer, as they always have.
+  const search = withoutCompose(searchParams);
   const listPath = href("/mailbox/:mailboxId/emails/:folder", {
     mailboxId: params.mailboxId,
     folder,
@@ -505,7 +441,10 @@ export default function EmailListRoute({ loaderData, params }: Route.ComponentPr
             ))}
           </div>
         ) : (
-          <FolderEmptyState folder={folder} onCompose={() => startCompose()} />
+          <FolderEmptyState
+            folder={folder}
+            composeHref={`${location.pathname}${withCompose(location.search, { mode: "new" })}`}
+          />
         )}
       </div>
 

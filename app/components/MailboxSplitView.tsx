@@ -5,31 +5,25 @@
 import type { ReactNode } from "react";
 import { useOutlet } from "react-router";
 import ComposePanel from "~/components/ComposePanel";
-import EmailPanelQuery from "~/components/EmailPanelQuery";
-import { useUIStore } from "~/hooks/useUIStore";
+import { useMailboxData } from "~/hooks/useMailboxData";
 
-interface MailboxSplitViewProps {
-  /**
-   * Legacy selection, still used by the search results route. The email list
-   * route drives the reading pane through a nested route instead, which this
-   * component picks up via `useOutlet`.
-   */
-  selectedEmailId?: string | null;
-  isComposing?: boolean;
-  children: ReactNode;
-}
+/**
+ * A list with its reading pane beside it. The pane is the nested route's
+ * outlet (the open email), the composer (`?compose`), or both stacked.
+ */
+export default function MailboxSplitView({ children }: { children: ReactNode }) {
+  const detail = useOutlet();
+  const { compose } = useMailboxData();
 
-export default function MailboxSplitView({
-  selectedEmailId = null,
-  isComposing: isComposingProp,
-  children,
-}: MailboxSplitViewProps) {
-  const outlet = useOutlet();
-  const isComposingStore = useUIStore((s) => s.isComposing);
-  const isComposing = isComposingProp ?? isComposingStore;
-
-  const detail = outlet ?? (selectedEmailId ? <EmailPanelQuery emailId={selectedEmailId} /> : null);
-  const isPanelOpen = detail !== null || isComposing;
+  // Keyed on what the composer starts from, so opening another reply or draft
+  // starts a fresh form instead of keeping the last one's fields.
+  const composer = compose && (
+    <ComposePanel
+      key={`${compose.mode}:${compose.original?.id ?? ""}:${compose.draft?.id ?? ""}`}
+      compose={compose}
+    />
+  );
+  const isPanelOpen = detail !== null || composer !== null;
 
   return (
     <div className="flex h-full">
@@ -42,15 +36,13 @@ export default function MailboxSplitView({
       </div>
       {isPanelOpen && (
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full md:w-auto">
-          {isComposing && !detail ? (
-            <ComposePanel />
-          ) : isComposing && detail ? (
+          {composer && detail ? (
             <div className="flex flex-col h-full overflow-y-auto">
-              <ComposePanel />
+              {composer}
               <div className="border-t border-kumo-line">{detail}</div>
             </div>
           ) : (
-            detail
+            (composer ?? detail)
           )}
         </div>
       )}

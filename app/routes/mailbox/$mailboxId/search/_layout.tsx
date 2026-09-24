@@ -2,17 +2,71 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Loader, Pagination, Tooltip } from "@cloudflare/kumo";
+import { Badge, LinkButton, Loader, Pagination, Tooltip } from "@cloudflare/kumo";
 import { ArrowLeftIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { href, useNavigate, useParams, useSearchParams } from "react-router";
+import {
+  href,
+  Link,
+  useMatches,
+  useNavigation,
+  useSearchParams,
+  type ShouldRevalidateFunctionArgs,
+} from "react-router";
 import { Folders } from "shared/folders";
 import MailboxSplitView from "~/components/MailboxSplitView";
-import { useUIStore } from "~/hooks/useUIStore";
+import { withoutCompose } from "~/lib/compose";
+import { revalidateOn } from "~/lib/revalidation";
+import { SEARCH_EMAIL_ROUTE_ID } from "~/lib/route-ids";
+import { parseSearchQuery } from "~/lib/search-parser";
 import { formatListDate, getSnippetText } from "~/lib/utils";
-import { useUpdateEmail } from "~/queries/emails";
-import { useSearchEmails, SEARCH_PAGE_SIZE } from "~/queries/search";
+import { ok, serverApi } from "~/services/api.server";
 import type { Email } from "~/types";
+import type { Route } from "./+types/_layout";
+
+const SEARCH_PAGE_SIZE = 25;
+
+/**
+ * Results for `?q`, a page at a time (`?page`). The query string is the whole
+ * search state, so a results page can be refreshed, shared, or gone back to.
+ */
+export async function loader({ params, request, context }: Route.LoaderArgs) {
+  const url = new URL(request.url);
+  const q = url.searchParams.get("q")?.trim() ?? "";
+  const rawPage = Number(url.searchParams.get("page") ?? "1");
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+  if (!q) return { q, page, results: [], totalCount: 0 };
+
+  const parsed = parseSearchQuery(q);
+  const { emails, totalCount } = await ok(
+    serverApi(context, request).mailboxes[":mailboxId"].search.$get({
+      param: { mailboxId: params.mailboxId },
+      query: {
+        page,
+        limit: SEARCH_PAGE_SIZE,
+        ...(parsed.query && { query: parsed.query }),
+        ...(parsed.from && { from: parsed.from }),
+        ...(parsed.to && { to: parsed.to }),
+        ...(parsed.subject && { subject: parsed.subject }),
+        ...(parsed.folder && { folder: parsed.folder }),
+        ...(parsed.date_start && { date_start: parsed.date_start }),
+        ...(parsed.date_end && { date_end: parsed.date_end }),
+        ...(parsed.is_read !== undefined && { is_read: parsed.is_read }),
+        ...(parsed.is_starred !== undefined && { is_starred: parsed.is_starred }),
+        ...(parsed.has_attachment && { has_attachment: true }),
+      },
+    }),
+  );
+  return { q, page, results: emails, totalCount };
+}
+
+/** Opening a result or the composer keeps the result list; a new query or page reloads it. */
+export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
+  return revalidateOn(args, { params: ["mailboxId"], search: ["q", "page"] });
+}
+
+export function meta({ loaderData }: Route.MetaArgs) {
+  return [{ title: `${loaderData?.q ? `“${loaderData.q}”` : "Search"} — Agentic Inbox` }];
+}
 
 function highlightTerms(text: string, query: string): React.ReactNode {
   if (!query || !text) return text;
@@ -43,39 +97,42 @@ function highlightTerms(text: string, query: string): React.ReactNode {
   }
 }
 
-export default function SearchResultsRoute() {
-  const { mailboxId = "" } = useParams<{ mailboxId: string }>();
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const { selectedEmailId, isComposing, selectEmail, closePanel } = useUIStore();
-  const updateEmail = useUpdateEmail();
-  const urlQuery = searchParams.get("q") || "";
-  const [page, setPage] = useState(1);
-  const searchKey = useMemo(() => `${mailboxId}::${urlQuery}`, [mailboxId, urlQuery]);
-  const prevSearchKeyRef = useRef(searchKey);
-  const searchChanged = prevSearchKeyRef.current !== searchKey;
-  const currentPage = searchChanged ? 1 : page;
+export default function SearchResultsRoute({ loaderData, params }: Route.ComponentProps) {
+  const { q: urlQuery, page: currentPage, results, totalCount } = loaderData;
+  const { mailboxId } = params;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigation = useNavigation();
 
-  useEffect(() => {
-    if (!searchChanged) {
-      return;
-    }
+  // `useParams` in a parent route does not see descendant params, so read the
+  // selected result from the match list instead.
+  const selectedEmailId =
+    (
+      useMatches().find((m) => m.id === SEARCH_EMAIL_ROUTE_ID)?.params as
+        | { emailId?: string }
+        | undefined
+    )?.emailId ?? null;
+  const isPanelOpen = selectedEmailId !== null;
+  // A new query is on its way: show that rather than the results it replaces.
+  const pendingQuery =
+    navigation.state === "loading" && navigation.location.pathname.endsWith("/search")
+      ? new URLSearchParams(navigation.location.search).get("q")?.trim()
+      : undefined;
+  const isLoading = pendingQuery !== undefined && pendingQuery !== urlQuery;
+  // Results open in place of any open composer, like rows in a folder.
+  const search = withoutCompose(searchParams);
 
-    prevSearchKeyRef.current = searchKey;
-    setPage(1);
-    closePanel();
-  }, [closePanel, searchChanged, searchKey]);
-
-  const { data: searchData, isLoading } = useSearchEmails(mailboxId, urlQuery, currentPage);
-  const results = searchData?.results ?? [];
-  const totalCount = searchData?.totalCount ?? 0;
-  const isPanelOpen = selectedEmailId !== null || isComposing;
-
-  const handleRowClick = (email: Email) => {
-    selectEmail(email.id);
-    if (!email.read && mailboxId)
-      updateEmail.mutate({ mailboxId, id: email.id, data: { read: true } });
+  const setPage = (next: number) => {
+    setSearchParams(
+      (prev) => {
+        const nextParams = new URLSearchParams(prev);
+        if (next <= 1) nextParams.delete("page");
+        else nextParams.set("page", String(next));
+        return nextParams;
+      },
+      { preventScrollReset: true },
+    );
   };
+
   const folderDisplayName = (name: string | null | undefined): string => {
     if (!name) return "";
     const map: Record<string, string> = {
@@ -89,20 +146,19 @@ export default function SearchResultsRoute() {
   };
 
   return (
-    <MailboxSplitView selectedEmailId={selectedEmailId} isComposing={isComposing}>
+    <MailboxSplitView>
       <>
         <div className="flex items-center gap-2 px-4 py-3.5 border-b border-kumo-line shrink-0 md:px-5">
           <Tooltip content="Back to inbox" side="bottom" asChild>
-            <Button
+            <LinkButton
+              href={href("/mailbox/:mailboxId/emails/:folder", {
+                mailboxId,
+                folder: Folders.INBOX,
+              })}
               variant="ghost"
               shape="square"
               size="sm"
               icon={<ArrowLeftIcon size={18} />}
-              onClick={() =>
-                navigate(
-                  href("/mailbox/:mailboxId/emails/:folder", { mailboxId, folder: Folders.INBOX }),
-                )
-              }
               aria-label="Back to inbox"
             />
           </Tooltip>
@@ -149,18 +205,11 @@ export default function SearchResultsRoute() {
                 const snippet = getSnippetText(email.snippet, 120);
                 const folderName = (email as Email & { folder_name?: string }).folder_name;
                 return (
-                  <div
+                  <Link
                     key={email.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => handleRowClick(email)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleRowClick(email);
-                      }
-                    }}
-                    className={`group flex items-center gap-3 w-full text-left cursor-pointer transition-colors border-b border-kumo-line px-4 py-2.5 md:px-5 md:py-3 ${isPanelOpen ? "md:px-4 md:py-2.5" : ""} ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
+                    to={{ pathname: email.id, search }}
+                    prefetch="intent"
+                    className={`group flex items-center gap-3 w-full text-left no-underline text-inherit transition-colors border-b border-kumo-line px-4 py-2.5 md:px-5 md:py-3 ${isPanelOpen ? "md:px-4 md:py-2.5" : ""} ${isSelected ? "bg-kumo-tint" : "hover:bg-kumo-tint"}`}
                   >
                     <div className="w-2.5 shrink-0 flex justify-center">
                       {!email.read && <div className="h-2 w-2 rounded-full bg-kumo-brand" />}
@@ -190,7 +239,7 @@ export default function SearchResultsRoute() {
                         </div>
                       )}
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
             </div>

@@ -2,25 +2,22 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Button, Empty } from "@cloudflare/kumo";
-import { WarningIcon } from "@phosphor-icons/react";
-import { useNavigate } from "react-router";
+import { data } from "react-router";
 
+/**
+ * Unmatched URLs. Throwing from the loader, rather than rendering a "not
+ * found" page, answers with a real 404 status and lets the root error
+ * boundary draw the page.
+ */
+export function loader() {
+  throw data(null, { status: 404, statusText: "Not Found" });
+}
+
+/**
+ * Never rendered -- the loader always throws. Exporting a component keeps this
+ * a UI route, so a document request gets the root error page rather than a
+ * bare resource-route 404.
+ */
 export default function NotFoundRoute() {
-  const navigate = useNavigate();
-
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <Empty
-        icon={<WarningIcon size={48} className="text-kumo-inactive" />}
-        title="404 -- Page Not Found"
-        description="The page you're looking for doesn't exist."
-        contents={
-          <Button variant="primary" size="sm" onClick={() => navigate("/")}>
-            Go Home
-          </Button>
-        }
-      />
-    </div>
-  );
+  return null;
 }

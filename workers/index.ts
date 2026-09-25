@@ -17,7 +17,14 @@ import {
   buildThreadingHeaders,
   listMailboxes,
 } from "./lib/email-helpers";
-import { rawOps, requireMailbox, toEmail, toEmails, type MailboxContext } from "./lib/mailbox";
+import {
+  forgetMailbox,
+  rawOps,
+  requireMailbox,
+  toEmail,
+  toEmails,
+  type MailboxContext,
+} from "./lib/mailbox";
 import { mailboxSettingsSchema, sendEmailRequestSchema } from "./lib/schemas";
 import { boolParamSchema, numericParamSchema, zJson, zQuery } from "./lib/validate";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
@@ -221,6 +228,7 @@ const routes = app
     const key = `mailboxes/${mailboxId}.json`;
     if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
     await c.env.BUCKET.delete(key); // TODO: also delete DO data and R2 attachment blobs
+    forgetMailbox(mailboxId);
     return c.body(null, 204);
   })
 

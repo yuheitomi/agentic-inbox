@@ -8,6 +8,7 @@
  * and attaches it to the Hono context (`c.var.mailboxStub`).
  */
 import { createMiddleware } from "hono/factory";
+import { type TimingVariables, wrapTime } from "hono/timing";
 import type { Email } from "~/types";
 import type { MailboxDO } from "../durableObject";
 import type { Env } from "../types";
@@ -16,7 +17,7 @@ export type MailboxStub = DurableObjectStub<MailboxDO>;
 
 export type MailboxContext = {
   Bindings: Env;
-  Variables: {
+  Variables: TimingVariables & {
     mailboxStub: MailboxStub;
   };
 };
@@ -116,7 +117,8 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
   if (!rawId) return c.json({ error: "Mailbox ID required" }, 400);
   const mailboxId = decodeURIComponent(rawId);
 
-  if (!(await mailboxExists(c.env.BUCKET, mailboxId))) {
+  // TEMP (latency measurement): reported as `r2`, ~0 on a cache hit.
+  if (!(await wrapTime(c, "r2", mailboxExists(c.env.BUCKET, mailboxId)))) {
     return c.json({ error: "Not found" }, 404);
   }
 

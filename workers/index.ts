@@ -4,6 +4,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { timing, wrapTime } from "hono/timing";
 import PostalMime from "postal-mime";
 import { z } from "zod";
 import type { Email, Folder, Mailbox } from "~/types";
@@ -141,7 +142,9 @@ app.use(
     },
   }),
 );
-app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
+// TEMP (email-detail latency measurement): reports the R2 check and the
+// Durable Object call as `Server-Timing` metrics, which `loadEmailDetail` reads.
+app.use("/api/v1/mailboxes/:mailboxId/*", timing(), requireMailbox);
 
 /**
  * The route table, declared as one chain.
@@ -368,7 +371,7 @@ const routes = app
   })
 
   .get("/api/v1/mailboxes/:mailboxId/emails/:id", async (c) => {
-    const email = toEmail(await c.var.mailboxStub.getEmail(c.req.param("id")));
+    const email = toEmail(await wrapTime(c, "do", c.var.mailboxStub.getEmail(c.req.param("id"))));
     if (!email) return c.json({ error: "Email not found" }, 404);
     return c.json(email);
   })
@@ -401,7 +404,11 @@ const routes = app
   // -- Threads ------------------------------------------------------
 
   .get("/api/v1/mailboxes/:mailboxId/threads/:threadId", async (c) => {
-    const emails = await rawOps(c.var.mailboxStub).getThreadEmails(c.req.param("threadId"));
+    const emails = await wrapTime(
+      c,
+      "do",
+      rawOps(c.var.mailboxStub).getThreadEmails(c.req.param("threadId")),
+    );
     return c.json(emails);
   })
 

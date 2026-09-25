@@ -43,6 +43,44 @@
       },
     ],
   },
+  // Settings for `wrangler preview` (https://developers.cloudflare.com/workers/previews/).
+  // Previews inherit none of the top-level bindings or vars, so each is
+  // redeclared here against a Preview-safe resource. Durable Object classes and
+  // migrations stay at the top level; each Preview gets its own namespaces.
+  // POLICY_AUD and TEAM_DOMAIN are secrets:
+  //   wrangler preview base-config secret put POLICY_AUD
+  "previews": {
+    "vars": {
+      "DOMAINS": "mail.opsdx.app",
+      "EMAIL_ADDRESSES": [],
+    },
+    "send_email": [
+      {
+        "name": "EMAIL",
+      },
+    ],
+    "r2_buckets": [
+      {
+        "binding": "BUCKET",
+        "bucket_name": "agentic-inbox-preview",
+      },
+    ],
+    "ai": {
+      "binding": "AI",
+    },
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "MAILBOX",
+          "class_name": "MailboxDO",
+        },
+        {
+          "name": "EMAIL_AGENT",
+          "class_name": "EmailAgent",
+        },
+      ],
+    },
+  },
   "migrations": [
     {
       "tag": "v1",

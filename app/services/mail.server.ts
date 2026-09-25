@@ -11,11 +11,10 @@
  * from the mailbox record on the server, never taken from the form.
  */
 
-import { data, redirect } from "react-router";
+import { redirect } from "react-router";
 import { htmlToPlainText, splitEmailList, toEmailListValue } from "~/lib/utils";
 import type { Mailbox } from "~/types";
 import { type ActionResult, field, ok, redirectTarget, result, type RpcClient } from "./api.server";
-import { type CallTiming, serverTimingHeader, timed } from "./timing.server";
 
 // ── Reading pane ───────────────────────────────────────────────────
 
@@ -26,33 +25,13 @@ import { type CallTiming, serverTimingHeader, timed } from "./timing.server";
  */
 export async function loadEmailDetail(api: RpcClient, mailboxId: string, emailId: string) {
   const mailbox = api.mailboxes[":mailboxId"];
-  // TEMP (latency measurement): each call is timed and the breakdown is
-  // logged and sent to the browser as `Server-Timing`.
-  const timings: CallTiming[] = [];
-  const start = performance.now();
-
-  const email = await ok(
-    timed(timings, "email", () =>
-      mailbox.emails[":id"].$get({ param: { mailboxId, id: emailId } }),
-    ),
-  );
-  const threadId = email.thread_id;
-  const thread = threadId
+  const email = await ok(mailbox.emails[":id"].$get({ param: { mailboxId, id: emailId } }));
+  const thread = email.thread_id
     ? await ok(
-        timed(timings, "thread", () =>
-          mailbox.threads[":threadId"].$get({ param: { mailboxId, threadId } }),
-        ),
+        mailbox.threads[":threadId"].$get({ param: { mailboxId, threadId: email.thread_id } }),
       )
     : [];
-
-  const totalMs = performance.now() - start;
-  console.log(
-    JSON.stringify({ kind: "emailDetail", totalMs, threadSize: thread.length, calls: timings }),
-  );
-  return data(
-    { email, thread },
-    { headers: { "Server-Timing": serverTimingHeader(timings, totalMs) } },
-  );
+  return { email, thread };
 }
 
 /**

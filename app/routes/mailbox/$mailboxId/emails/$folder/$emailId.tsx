@@ -25,11 +25,6 @@ export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
   return revalidateOn(args, { params: ["mailboxId", "emailId"] });
 }
 
-/** TEMP (latency measurement): pass the loader's `Server-Timing` through to the browser. */
-export function headers({ loaderHeaders }: Route.HeadersArgs) {
-  return loaderHeaders;
-}
-
 export function meta({ loaderData }: Route.MetaArgs) {
   const subject = loaderData ? loaderData.email.subject || "(no subject)" : "Email not found";
   return [{ title: `${subject} — Agentic Inbox` }];

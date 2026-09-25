@@ -66,15 +66,57 @@ export function toEmails(rows: unknown[]): Email[] {
   return rows as Email[];
 }
 
+// -- Mailbox existence cache ------------------------------------------
+//
+// Every mailbox API call checks that the mailbox record exists in R2, and that
+// HEAD costs ~50ms -- most of an email open's server time. Mailboxes are only
+// created and deleted by hand, so this isolate remembers the ones it has seen
+// exist for a few minutes.
+//
+// Only positive answers are kept, so a new mailbox is visible at once. A
+// deleted one is forgotten here immediately but may pass the check in other
+// isolates until its entry expires; the Durable Object behind it then answers
+// with whatever it still holds, which the route already allowed a moment ago.
+
+const MAILBOX_EXISTS_TTL_MS = 5 * 60 * 1000;
+const MAX_KNOWN_MAILBOXES = 1000;
+
+/** R2 key of a mailbox record -> when this isolate stops trusting it. */
+const knownMailboxes = new Map<string, number>();
+
+function mailboxKey(mailboxId: string) {
+  return `mailboxes/${mailboxId}.json`;
+}
+
+async function mailboxExists(bucket: R2Bucket, mailboxId: string): Promise<boolean> {
+  const key = mailboxKey(mailboxId);
+  const expiresAt = knownMailboxes.get(key);
+  if (expiresAt !== undefined && expiresAt > Date.now()) return true;
+
+  const exists = (await bucket.head(key)) !== null;
+  knownMailboxes.delete(key);
+  if (exists) {
+    // Maps iterate in insertion order, so the first key is the oldest entry.
+    if (knownMailboxes.size >= MAX_KNOWN_MAILBOXES) {
+      const oldest = knownMailboxes.keys().next().value;
+      if (oldest !== undefined) knownMailboxes.delete(oldest);
+    }
+    knownMailboxes.set(key, Date.now() + MAILBOX_EXISTS_TTL_MS);
+  }
+  return exists;
+}
+
+/** Drop a mailbox from this isolate's existence cache once its record is deleted. */
+export function forgetMailbox(mailboxId: string) {
+  knownMailboxes.delete(mailboxKey(mailboxId));
+}
+
 export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) => {
   const rawId = c.req.param("mailboxId");
   if (!rawId) return c.json({ error: "Mailbox ID required" }, 400);
   const mailboxId = decodeURIComponent(rawId);
 
-  // Verify mailbox exists
-  const key = `mailboxes/${mailboxId}.json`;
-  const obj = await c.env.BUCKET.head(key);
-  if (!obj) {
+  if (!(await mailboxExists(c.env.BUCKET, mailboxId))) {
     return c.json({ error: "Not found" }, 404);
   }
 

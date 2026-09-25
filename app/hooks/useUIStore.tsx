@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { create } from "zustand";
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
 /**
  * Chrome toggles that belong to no route: the mobile sidebar and the agent
@@ -18,12 +18,27 @@ interface UIState {
   toggleAgentPanel: () => void;
 }
 
-export const useUIStore = create<UIState>((set, get) => ({
-  isSidebarOpen: false,
-  isAgentPanelOpen: true,
+const UIContext = createContext<UIState | null>(null);
 
-  closeSidebar: () => set({ isSidebarOpen: false }),
-  toggleSidebar: () => set({ isSidebarOpen: !get().isSidebarOpen }),
+/** Holds the chrome toggles for everything rendered inside the mailbox layout. */
+export function UIStoreProvider({ children }: { children: ReactNode }) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(true);
 
-  toggleAgentPanel: () => set({ isAgentPanelOpen: !get().isAgentPanelOpen }),
-}));
+  const closeSidebar = useCallback(() => setIsSidebarOpen(false), []);
+  const toggleSidebar = useCallback(() => setIsSidebarOpen((open) => !open), []);
+  const toggleAgentPanel = useCallback(() => setIsAgentPanelOpen((open) => !open), []);
+
+  const value = useMemo(
+    () => ({ isSidebarOpen, closeSidebar, toggleSidebar, isAgentPanelOpen, toggleAgentPanel }),
+    [isSidebarOpen, closeSidebar, toggleSidebar, isAgentPanelOpen, toggleAgentPanel],
+  );
+
+  return <UIContext value={value}>{children}</UIContext>;
+}
+
+export function useUIStore(): UIState {
+  const state = useContext(UIContext);
+  if (!state) throw new Error("useUIStore must be used inside <UIStoreProvider>");
+  return state;
+}

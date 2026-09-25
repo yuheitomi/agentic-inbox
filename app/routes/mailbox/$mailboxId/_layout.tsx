@@ -9,7 +9,7 @@ import { EMAIL_PANEL_FETCHER_KEY } from "~/components/EmailPanel";
 import Header from "~/components/Header";
 import Sidebar, { FOLDER_FETCHER_KEY } from "~/components/Sidebar";
 import { useSubmissionToast } from "~/hooks/useSubmissionToast";
-import { useUIStore } from "~/hooks/useUIStore";
+import { UIStoreProvider, useUIStore } from "~/hooks/useUIStore";
 import {
   COMPOSE_FETCHER_KEY,
   COMPOSE_SEARCH_KEYS,
@@ -101,13 +101,21 @@ function useMailboxToasts() {
 }
 
 export default function MailboxRoute({ params }: Route.ComponentProps) {
+  return (
+    <UIStoreProvider>
+      <MailboxChrome mailboxId={params.mailboxId} />
+    </UIStoreProvider>
+  );
+}
+
+function MailboxChrome({ mailboxId }: { mailboxId: string }) {
   const { isSidebarOpen, closeSidebar, isAgentPanelOpen } = useUIStore();
   useMailboxToasts();
 
   // The mobile sidebar is an overlay; switching mailboxes should not leave it open.
   useEffect(() => {
     closeSidebar();
-  }, [params.mailboxId, closeSidebar]);
+  }, [mailboxId, closeSidebar]);
 
   return (
     <div className="flex h-screen overflow-hidden">
